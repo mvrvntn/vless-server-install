@@ -680,7 +680,7 @@ generate_server_config() {
             "certificateFile": "$SSL_DIR/fullchain.cer",
             "keyFile": "$SSL_DIR/private.key"
           }],
-          "alpn": ["h2", "http/1.1"]
+          "alpn": ["http/1.1"]
         },
         "sockopt": {
           "tcpFastOpen": true
@@ -1065,7 +1065,7 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
 
         encoded_remark_vision = urllib.parse.quote(remark_vision)
         
-        vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=firefox&alpn=h2,http/1.1#{encoded_remark_vision}"
+        vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=firefox&alpn=http/1.1#{encoded_remark_vision}"
         
         # Задаем комментарии с метаданными подписки (название, страница информации, анонсы)
         sub_content = f"#profile-title: {client_name}\n#profile-web-page-url: https://mvrvntn.github.io/koridor/\n#profile-notice: https://mvrvntn.github.io/koridor/\n#profile-announce: https://mvrvntn.github.io/koridor/\n#announce: https://mvrvntn.github.io/koridor/\n{vless_vision}\n"
@@ -1191,7 +1191,7 @@ urlencode() {
 encoded_remark_vision=$(urlencode "$remark_vision")
 
 # Ссылки для подключения
-VLESS_VISION="vless://${UUID}@${DOMAIN}:${PORT}?flow=${FLOW}&security=tls&type=tcp&fp=${FINGERPRINT}&alpn=h2,http/1.1#${encoded_remark_vision}"
+VLESS_VISION="vless://${UUID}@${DOMAIN}:${PORT}?flow=${FLOW}&security=tls&type=tcp&fp=${FINGERPRINT}&alpn=http/1.1#${encoded_remark_vision}"
 SUBSCRIPTION_URL="https://${DOMAIN}/sub/${UUID}"
 
 echo -e "\n${BOLD}${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
