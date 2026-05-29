@@ -36,7 +36,70 @@ update_marker_val() {
     fi
 }
 
-# === Управление Cloudflare WARP ===
+update_geoblock_list() {
+    local list_file="/etc/xray/geoblock.lst"
+    local temp_file=$(mktemp)
+    
+    echo "📥 Обновление списка геоблокированных доменов..."
+    # Пытаемся скачать с GitHub
+    if curl -sSL --connect-timeout 8 "https://raw.githubusercontent.com/itdoginfo/allow-domains/refs/heads/main/Categories/geoblock.lst" -o "$temp_file" && [ -s "$temp_file" ]; then
+        # Нормализуем переводы строк и убираем пробелы
+        sed -i 's/\r//g' "$temp_file"
+        if ! cmp -s "$temp_file" "$list_file" 2>/dev/null; then
+            mkdir -p /etc/xray
+            mv "$temp_file" "$list_file"
+            echo "✅ Список доменов успешно обновлен."
+            rm -f "$temp_file"
+            return 0
+        fi
+    fi
+    rm -f "$temp_file"
+    
+    # Если файла еще нет (первая установка), создаем базовый дефолтный список
+    if [ ! -f "$list_file" ]; then
+        mkdir -p /etc/xray
+        cat > "$list_file" <<EOF
+4pda.to
+habr.com
+claude.ai
+claude.com
+anthropic.com
+openai.com
+chatgpt.com
+oaistatic.com
+oaiusercontent.com
+notion.so
+notion.site
+notion.com
+notion-static.com
+copilot.microsoft.com
+designer.microsoft.com
+netflix.com
+netflix.net
+nflxext.com
+nflximg.net
+nflxvideo.net
+primevideo.com
+instagram.com
+facebook.com
+fbcdn.net
+twitter.com
+x.com
+twimg.com
+spotify.com
+deepl.com
+openrouter.ai
+trae.ai
+windsurf.com
+elevenlabs.io
+EOF
+        echo "✅ Создан базовый список геоблокированных доменов."
+        return 0
+    fi
+    echo "ℹ️ Обновление не требуется (список совпадает с текущим или недоступен GitHub)."
+    return 1
+}
+
 install_warp() {
     echo "🌀 Установка Cloudflare WARP..."
     if ! command -v wg-quick &>/dev/null || ! command -v wireguard &>/dev/null; then
@@ -102,6 +165,13 @@ install_warp() {
 
         systemctl enable wg-quick@warp >/dev/null 2>&1
         systemctl start wg-quick@warp >/dev/null 2>&1
+        update_geoblock_list
+        
+        # Добавляем обновление списка геоблокировок в cron
+        local script_path=$(realpath "$0")
+        (crontab -l 2>/dev/null | grep -v 'update-geoblocks'; \
+         echo "30 3 * * * bash $script_path --update-geoblocks >/dev/null 2>&1") | crontab -
+
         echo "✅ Cloudflare WARP успешно установлен и запущен!"
         update_marker_val "WARP_INSTALLED" "true"
         update_marker_val "WARP_ENABLED" "true"
@@ -308,43 +378,98 @@ EOF
     warp_menu() {
         local warp_installed=$(get_installed_var "WARP_INSTALLED")
         local warp_enabled=$(get_installed_var "WARP_ENABLED")
+        local warp_mode=$(get_installed_var "WARP_MODE")
+        [ -z "$warp_mode" ] && warp_mode="smart"
         
         echo -e "\n--- Управление Cloudflare WARP ---"
         if [ "$warp_installed" != "true" ]; then
             echo "1. Установить и включить WARP"
+            echo "2. Назад"
+            read -p "Выбор: " wchoice
+            case $wchoice in
+                1)
+                    install_warp
+                    DOMAIN=$(get_installed_var "DOMAIN")
+                    NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+                    generate_server_config
+                    warp_menu
+                    ;;
+                2)
+                    main_menu
+                    ;;
+                *)
+                    echo "Неверный выбор"
+                    warp_menu
+                    ;;
+            esac
         else
+            local status_text="Отключен"
+            [ "$warp_enabled" == "true" ] && status_text="Включен"
+            
+            local mode_text="Избирательный обход (Smart)"
+            [ "$warp_mode" == "full" ] && mode_text="Весь трафик через WARP (Full)"
+            
+            echo "Текущий статус: $status_text"
+            echo "Текущий режим: $mode_text"
+            echo "----------------------------------"
             if [ "$warp_enabled" == "true" ]; then
                 echo "1. Отключить WARP (прямой выход)"
             else
                 echo "1. Включить WARP"
             fi
-            echo "2. Переустановить/Обновить WARP"
-        fi
-        echo "3. Назад"
-        read -p "Выбор: " wchoice
-        case $wchoice in
-            1)
-                if [ "$warp_installed" != "true" ]; then
-                    install_warp
-                else
+            echo "2. Изменить режим работы WARP (Smart / Full)"
+            echo "3. Обновить список геоблокируемых доменов"
+            echo "4. Переустановить/Обновить WARP"
+            echo "5. Назад"
+            read -p "Выбор: " wchoice
+            case $wchoice in
+                1)
                     toggle_warp
-                fi
-                warp_menu
-                ;;
-            2)
-                if [ "$warp_installed" == "true" ]; then
+                    warp_menu
+                    ;;
+                2)
+                    echo -e "\nВыберите режим работы WARP:"
+                    echo "1. Избирательный обход (Smart) - через WARP идут только заблокированные/геоблокированные ресурсы, пинг на остальные ресурсы не растет."
+                    echo "2. Весь трафик (Full) - весь исходящий трафик VPS идет через сеть WARP."
+                    read -p "Выбор (1-2): " mchoice
+                    if [ "$mchoice" == "1" ]; then
+                        update_marker_val "WARP_MODE" "smart"
+                        echo "✅ Выбран режим Smart"
+                    elif [ "$mchoice" == "2" ]; then
+                        update_marker_val "WARP_MODE" "full"
+                        echo "✅ Выбран режим Full"
+                    else
+                        echo "❌ Неверный выбор"
+                    fi
+                    DOMAIN=$(get_installed_var "DOMAIN")
+                    NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+                    generate_server_config
+                    warp_menu
+                    ;;
+                3)
+                    update_geoblock_list
+                    DOMAIN=$(get_installed_var "DOMAIN")
+                    NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+                    generate_server_config
+                    echo "✅ Список обновлен и применен."
+                    warp_menu
+                    ;;
+                4)
                     install_warp
-                fi
-                warp_menu
-                ;;
-            3)
-                main_menu
-                ;;
-            *)
-                echo "Неверный выбор"
-                warp_menu
-                ;;
-        esac
+                    DOMAIN=$(get_installed_var "DOMAIN")
+                    NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+                    generate_server_config
+                    warp_menu
+                    ;;
+                5)
+                    main_menu
+                    ;;
+                *)
+                    echo "Неверный выбор"
+                    warp_menu
+                    ;;
+            esac
+        fi
     }
 
     uninstall_all() {
@@ -481,6 +606,12 @@ install_dependencies() {
     if ! sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
         echo "net.ipv4.tcp_fastopen=3" >> /etc/sysctl.conf
     fi
+    if ! sysctl net.ipv4.tcp_slow_start_after_idle | grep -q "0"; then
+        echo "net.ipv4.tcp_slow_start_after_idle=0" >> /etc/sysctl.conf
+    fi
+    if ! sysctl net.ipv4.tcp_notsent_lowat | grep -q "16384"; then
+        echo "net.ipv4.tcp_notsent_lowat=16384" >> /etc/sysctl.conf
+    fi
     sysctl -p > /dev/null 2>&1
 }
 
@@ -535,6 +666,9 @@ generate_server_config() {
     echo "🧩 Генерация конфигурации Xray..."
     local config_file="$XRAY_CONFIG_DIR/config.json"
     
+    # Объявление ассоциативного массива
+    declare -A UUIDs
+    
     # Инициализация массивов для клиентов
     local vless_clients=()
     
@@ -571,10 +705,15 @@ generate_server_config() {
     
     # Проверяем статус WARP
     local warp_enabled=$(get_installed_var "WARP_ENABLED")
+    local warp_mode=$(get_installed_var "WARP_MODE")
+    [ -z "$warp_mode" ] && warp_mode="smart"
+    
     local outbounds_str
+    local routing_rules_str=""
     
     if [ "$warp_enabled" == "true" ]; then
-        outbounds_str='[
+        if [ "$warp_mode" == "full" ]; then
+            outbounds_str='[
     {
       "tag": "WARP",
       "protocol": "freedom",
@@ -605,6 +744,64 @@ generate_server_config() {
       "protocol": "blackhole"
     }
   ]'
+        else
+            outbounds_str='[
+    {
+      "tag": "DIRECT",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tcpFastOpen": true
+        }
+      }
+    },
+    {
+      "tag": "WARP",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "interface": "warp",
+          "tcpFastOpen": true
+        }
+      }
+    },
+    {
+      "tag": "BLOCK",
+      "protocol": "blackhole"
+    }
+  ]'
+            
+            # Читаем список геоблока
+            local geoblocks=()
+            if [ -f "/etc/xray/geoblock.lst" ]; then
+                while IFS= read -r line || [ -n "$line" ]; do
+                    line=$(echo "$line" | tr -d '\r' | xargs)
+                    if [[ -z "$line" || "$line" =~ ^# ]]; then
+                        continue
+                    fi
+                    geoblocks+=("\"domain:$line\"")
+                done < "/etc/xray/geoblock.lst"
+            fi
+            
+            # Добавим встроенные правила Xray для надежности
+            geoblocks+=("\"geosite:openai\"" "\"geosite:netflix\"" "\"geosite:facebook\"" "\"geosite:instagram\"" "\"geosite:twitter\"" "\"geosite:disney\"" "\"geosite:spotify\"")
+            
+            local geoblocks_joined=$(IFS=,; echo "${geoblocks[*]}")
+            routing_rules_str=",
+      {
+        \"type\": \"field\",
+        \"domain\": [
+          $geoblocks_joined
+        ],
+        \"outboundTag\": \"WARP\"
+      }"
+        fi
     else
         outbounds_str='[
     {
@@ -666,7 +863,7 @@ generate_server_config() {
             "certificateFile": "$SSL_DIR/fullchain.cer",
             "keyFile": "$SSL_DIR/private.key"
           }],
-          "alpn": ["http/1.1"]
+          "alpn": ["h2", "http/1.1"]
         },
         "sockopt": {
           "tcpFastOpen": true
@@ -694,7 +891,7 @@ generate_server_config() {
           "bittorrent"
         ],
         "outboundTag": "BLOCK"
-      }
+      }${routing_rules_str}
     ]
   }
 }
@@ -1040,15 +1237,16 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
             domain = self.headers.get('Host', '').split(':')[0]
 
         if emoji:
-            remark_vision = f"{emoji}🌐 VLESS-TCP ({client_name})"
+            remark_vision = f"{emoji}🌐 VLESS-TCP"
         else:
-            remark_vision = f"🌐 VLESS-TCP ({client_name})"
+            remark_vision = f"🌐 VLESS-TCP"
 
         encoded_remark_vision = urllib.parse.quote(remark_vision)
         
-        vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=firefox#{encoded_remark_vision}"
+        vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=firefox&alpn=h2,http/1.1#{encoded_remark_vision}"
         
-        sub_content = f"{vless_vision}\n"
+        # Задаем комментарии с метаданными подписки (название, страница информации, анонсы)
+        sub_content = f"#profile-title: {client_name}\n#profile-web-page-url: https://github.com/mvrvntn/koridor\n#profile-notice: https://github.com/mvrvntn/koridor\n#profile-announce: https://github.com/mvrvntn/koridor\n#announce: https://github.com/mvrvntn/koridor\n{vless_vision}\n"
         b64_content = base64.b64encode(sub_content.encode("utf-8")).decode("utf-8")
         
         _routing = roscomvpn_resolver.get()
@@ -1056,6 +1254,17 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        # Передаем заголовки для отображения названия подписки и переходов по кнопкам
+        self.send_header("profile-title", client_name)
+        self.send_header("Profile-Title", "base64:" + base64.b64encode(client_name.encode('utf-8')).decode('utf-8'))
+        self.send_header("profile-web-page-url", "https://github.com/mvrvntn/koridor")
+        self.send_header("Profile-Web-Page-Url", "https://github.com/mvrvntn/koridor")
+        self.send_header("profile-notice", "https://github.com/mvrvntn/koridor")
+        self.send_header("Profile-Notice", "https://github.com/mvrvntn/koridor")
+        self.send_header("profile-announce", "https://github.com/mvrvntn/koridor")
+        self.send_header("Profile-Announce", "https://github.com/mvrvntn/koridor")
+        self.send_header("announce", "https://github.com/mvrvntn/koridor")
+        self.send_header("Announce", "https://github.com/mvrvntn/koridor")
         if _routing:
             self.send_header("routing", _routing)
             self.send_header("routing-enable", "true")
@@ -1136,9 +1345,9 @@ fi
 
 # Генерация названий с новыми эмодзи-символами и скобками
 if [ -n "$EMOJI" ]; then
-  remark_vision="${EMOJI}🌐 VLESS-TCP (${remarks})"
+  remark_vision="${EMOJI}🌐 VLESS-TCP"
 else
-  remark_vision="🌐 VLESS-TCP (${remarks})"
+  remark_vision="🌐 VLESS-TCP"
 fi
 
 urlencode() {
@@ -1148,7 +1357,7 @@ urlencode() {
 encoded_remark_vision=$(urlencode "$remark_vision")
 
 # Ссылки для подключения
-VLESS_VISION="vless://${UUID}@${DOMAIN}:${PORT}?flow=${FLOW}&security=tls&type=tcp&fp=${FINGERPRINT}#${encoded_remark_vision}"
+VLESS_VISION="vless://${UUID}@${DOMAIN}:${PORT}?flow=${FLOW}&security=tls&type=tcp&fp=${FINGERPRINT}&alpn=h2,http/1.1#${encoded_remark_vision}"
 SUBSCRIPTION_URL="https://${DOMAIN}/sub/${UUID}"
 
 echo -e "\n=== Ссылки для подключения ==="
@@ -1171,6 +1380,18 @@ EOF
 
     chmod +x "$GENERATE_SCRIPT"
 }
+
+# === Обработка флага автоматического обновления геоблокировок ===
+if [ "$1" == "--update-geoblocks" ]; then
+    update_geoblock_list
+    DOMAIN=$(get_installed_var "DOMAIN")
+    NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+    if [ -n "$DOMAIN" ] && [ -n "$NUM_DEVICES" ]; then
+        generate_server_config
+        echo "✅ Конфигурация Xray перегенерирована."
+    fi
+    exit 0
+fi
 
 # === Обработка флага headless ===
 if [ "$1" == "--headless" ]; then
