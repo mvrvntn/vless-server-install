@@ -222,7 +222,7 @@ generate_server_config() {
         "decryption": "none",
         "fallbacks": [
           {
-            "path": "/xhttppath/",
+            "path": "/wspath/",
             "dest": "127.0.0.1:10000"
           },
           {
@@ -261,25 +261,10 @@ generate_server_config() {
         "clients": [$vless_clients_str],
         "decryption": "none"
       },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls"
-        ]
-      },
       "streamSettings": {
-        "network": "xhttp",
-        "xhttpSettings": {
-          "mode": "auto",
-          "path": "/xhttppath/",
-          "extra": {
-            "noSSEHeader": true,
-            "xPaddingBytes": "100-1000",
-            "scMaxBufferedPosts": 30,
-            "scMaxEachPostBytes": 1000000,
-            "scStreamUpServerSecs": "20-80"
-          }
+        "network": "ws",
+        "wsSettings": {
+          "path": "/wspath/"
         }
       }
     },
@@ -472,26 +457,26 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
 
         # Генерация ссылок по структуре:
         # ФЛАГ🌐 VLESS-TCP (имя)
-        # ФЛАГ🛡️ XHTTP (имя)
+        # ФЛАГ🔌 VLESS-WS (имя)
         # ФЛАГ⚡ HYSTERIA2 (имя)
         if emoji:
             remark_vision = f"{emoji}🌐 VLESS-TCP ({client_name})"
-            remark_xhttp = f"{emoji}🛡️ XHTTP ({client_name})"
+            remark_ws = f"{emoji}🔌 VLESS-WS ({client_name})"
             remark_hy2 = f"{emoji}⚡ HYSTERIA2 ({client_name})"
         else:
             remark_vision = f"🌐 VLESS-TCP ({client_name})"
-            remark_xhttp = f"🛡️ XHTTP ({client_name})"
+            remark_ws = f"🔌 VLESS-WS ({client_name})"
             remark_hy2 = f"⚡ HYSTERIA2 ({client_name})"
 
         encoded_remark_vision = urllib.parse.quote(remark_vision)
-        encoded_remark_xhttp = urllib.parse.quote(remark_xhttp)
+        encoded_remark_ws = urllib.parse.quote(remark_ws)
         encoded_remark_hy2 = urllib.parse.quote(remark_hy2)
         
         vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=firefox#{encoded_remark_vision}"
-        vless_xhttp = f"vless://{uuid_param}@{domain}:443?security=tls&type=xhttp&mode=auto&path=%2Fxhttppath%2F&fp=firefox#{encoded_remark_xhttp}"
+        vless_ws = f"vless://{uuid_param}@{domain}:443?security=tls&type=ws&path=%2Fwspath%2F&fp=firefox#{encoded_remark_ws}"
         hysteria2 = f"hysteria2://{uuid_param}@{domain}:443/?sni={domain}&alpn=h3#{encoded_remark_hy2}"
         
-        sub_content = f"{vless_vision}\n{vless_xhttp}\n{hysteria2}\n"
+        sub_content = f"{vless_vision}\n{vless_ws}\n{hysteria2}\n"
         b64_content = base64.b64encode(sub_content.encode("utf-8")).decode("utf-8")
         
         self.send_response(200)
@@ -575,11 +560,11 @@ fi
 # Генерация названий с новыми эмодзи-символами и скобками
 if [ -n "$EMOJI" ]; then
   remark_vision="${EMOJI}🌐 VLESS-TCP (${remarks})"
-  remark_xhttp="${EMOJI}🛡️ XHTTP (${remarks})"
+  remark_ws="${EMOJI}🔌 VLESS-WS (${remarks})"
   remark_hy2="${EMOJI}⚡ HYSTERIA2 (${remarks})"
 else
   remark_vision="🌐 VLESS-TCP (${remarks})"
-  remark_xhttp="🛡️ XHTTP (${remarks})"
+  remark_ws="🔌 VLESS-WS (${remarks})"
   remark_hy2="⚡ HYSTERIA2 (${remarks})"
 fi
 
@@ -588,20 +573,20 @@ urlencode() {
 }
 
 encoded_remark_vision=$(urlencode "$remark_vision")
-encoded_remark_xhttp=$(urlencode "$remark_xhttp")
+encoded_remark_ws=$(urlencode "$remark_ws")
 encoded_remark_hy2=$(urlencode "$remark_hy2")
 
 # Ссылки для подключения
 VLESS_VISION="vless://${UUID}@${DOMAIN}:${PORT}?flow=${FLOW}&security=tls&type=tcp&fp=${FINGERPRINT}#${encoded_remark_vision}"
-VLESS_XHTTP="vless://${UUID}@${DOMAIN}:${PORT}?security=tls&type=xhttp&mode=auto&path=%2Fxhttppath%2F&fp=${FINGERPRINT}#${encoded_remark_xhttp}"
+VLESS_WS="vless://${UUID}@${DOMAIN}:${PORT}?security=tls&type=ws&path=%2Fwspath%2F&fp=${FINGERPRINT}#${encoded_remark_ws}"
 HYSTERIA2="hysteria2://${UUID}@${DOMAIN}:${PORT}/?sni=${DOMAIN}&alpn=h3#${encoded_remark_hy2}"
 SUBSCRIPTION_URL="https://${DOMAIN}/sub/${UUID}"
 
 echo -e "\n=== Ссылки для подключения ==="
 echo -e "\n1. VLESS TCP Vision (Стандарт):"
 echo "$VLESS_VISION"
-echo -e "\n2. VLESS XHTTP (Через HTTP/2 обход блокировок):"
-echo "$VLESS_XHTTP"
+echo -e "\n2. VLESS WebSocket (Обход блокировок / CDN):"
+echo "$VLESS_WS"
 echo -e "\n3. Hysteria 2 (QUIC / UDP протокол):"
 echo "$HYSTERIA2"
 echo -e "\n4. Ссылка подписки (все 3 конфига одной ссылкой):"
@@ -610,13 +595,13 @@ echo "$SUBSCRIPTION_URL"
 echo -e "\n=== Генерация QR-кода ==="
 echo "Выберите, для чего отобразить QR-код:"
 echo "1. VLESS TCP Vision"
-echo "2. VLESS XHTTP"
+echo "2. VLESS WebSocket"
 echo "3. Hysteria 2"
 echo "4. Ссылка подписки (импорт в клиент)"
 read -p "Выбор (1-4): " qr_choice
 case "$qr_choice" in
   1) qrencode -t UTF8 "$VLESS_VISION" ;;
-  2) qrencode -t UTF8 "$VLESS_XHTTP" ;;
+  2) qrencode -t UTF8 "$VLESS_WS" ;;
   3) qrencode -t UTF8 "$HYSTERIA2" ;;
   4) qrencode -t UTF8 "$SUBSCRIPTION_URL" ;;
   *) echo "Выход без вывода QR-кода" ;;
