@@ -234,6 +234,13 @@ generate_server_config() {
           }
         ]
       },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      },
       "streamSettings": {
         "network": "tcp",
         "security": "tls",
@@ -253,6 +260,13 @@ generate_server_config() {
       "settings": {
         "clients": [$vless_clients_str],
         "decryption": "none"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
       },
       "streamSettings": {
         "network": "xhttp",
@@ -279,6 +293,12 @@ generate_server_config() {
       "streamSettings": {
         "network": "hysteria",
         "security": "tls",
+        "finalmask": {
+          "quicParams": {
+            "debug": false,
+            "congestion": "bbr"
+          }
+        },
         "hysteriaSettings": {
           "version": 2
         },
@@ -292,12 +312,41 @@ generate_server_config() {
       }
     }
   ],
-  "outbounds": [{
-    "protocol": "freedom",
-    "settings": {
-      "domainStrategy": "UseIPv4"
+  "outbounds": [
+    {
+      "tag": "DIRECT",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      }
+    },
+    {
+      "tag": "BLOCK",
+      "protocol": "blackhole"
     }
-  }]
+  ],
+  "routing": {
+    "rules": [
+      {
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "BLOCK"
+      },
+      {
+        "domain": [
+          "geosite:private"
+        ],
+        "outboundTag": "BLOCK"
+      },
+      {
+        "protocol": [
+          "bittorrent"
+        ],
+        "outboundTag": "BLOCK"
+      }
+    ]
+  }
 }
 EOF
 
