@@ -162,17 +162,19 @@ setup_certificates() {
         exit 1
     }
 
-    # Создаём симлинки на сертификаты
-    ln -sf "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$SSL_DIR/fullchain.cer"
-    ln -sf "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$SSL_DIR/private.key"
+    # Копируем сертификаты вместо создания симлинков
+    cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$SSL_DIR/fullchain.cer"
+    cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$SSL_DIR/private.key"
 
-    # Устанавливаем права
+    # Устанавливаем права и владельца для пользователя nobody (от имени которого работает Xray)
+    chown -R nobody:nogroup "$SSL_DIR"
+    chmod 755 "$SSL_DIR"
     chmod 644 "$SSL_DIR/fullchain.cer"
     chmod 600 "$SSL_DIR/private.key"
 
-    # Добавляем обновление сертификатов в cron (только рестарт Xray)
+    # Добавляем обновление сертификатов в cron (копирование и рестарт Xray)
     (crontab -l 2>/dev/null | grep -v 'certbot renew'; \
-     echo "0 3 * * * certbot renew --quiet --post-hook \"systemctl restart xray\"") | crontab -
+     echo "0 3 * * * certbot renew --quiet --post-hook \"cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $SSL_DIR/fullchain.cer && cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $SSL_DIR/private.key && chown -R nobody:nogroup $SSL_DIR && chmod 644 $SSL_DIR/fullchain.cer && chmod 600 $SSL_DIR/private.key && systemctl restart xray\"") | crontab -
 }
 
 # === Генерация UUID и серверного конфигурационного файла ===
