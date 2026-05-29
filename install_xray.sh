@@ -1528,10 +1528,11 @@ EOF
         echo -e " ${BOLD}${YELLOW}5.${NC} 📰 Просмотреть системные логи служб"
         echo -e " ${BOLD}${YELLOW}6.${NC} 📊 Мониторинг активных соединений (port 443)"
         echo -e " ${BOLD}${YELLOW}7.${NC} 🛠️ Запустить полную диагностику системы (Troubleshooting)"
-        echo -e " ${BOLD}${RED}8. 🗑️ Полностью удалить всю установку Xray с сервера${NC}"
-        echo -e " ${BOLD}${CYAN}9.${NC} 🚪 Выйти из терминала"
+        echo -e " ${BOLD}${YELLOW}8.${NC} 🔄 Обновить скрипт с GitHub и применить новые фиксы"
+        echo -e " ${BOLD}${RED}9. 🗑️ Полностью удалить всю установку Xray с сервера${NC}"
+        echo -e " ${BOLD}${CYAN}10.${NC} 🚪 Выйти из терминала"
         echo -e "${CYAN}──────────────────────────────────────────────────────────${NC}"
-        read -p "Выберите действие (1-9): " choice
+        read -p "Выберите действие (1-10): " choice
         case $choice in
             1) "$GENERATE_SCRIPT" ; main_menu ;;
             2) add_client ; main_menu ;;
@@ -1541,6 +1542,14 @@ EOF
             6) show_connections ; main_menu ;;
             7) run_diagnostics ; main_menu ;;
             8) 
+                echo -e "\n${BOLD}${GREEN}🔄 Загрузка последней версии скрипта...${NC}"
+                cd /root || exit
+                curl -s -o install_xray.sh -L https://raw.githubusercontent.com/mvrvntn/vless-server-install/main/install_xray.sh && chmod +x install_xray.sh
+                echo -e "${GREEN}✅ Скрипт обновлен! Применяем обновления ядра и конфигурации...${NC}"
+                /root/install_xray.sh --update-core
+                exit 0
+                ;;
+            9) 
                 echo -e "\n${BOLD}${RED}⚠️ ВНИМАНИЕ! Это действие удалит Xray, все конфигурации и WARP!${NC}"
                 read -p "Вы уверены? (y/n): " uconf
                 if [[ "$uconf" =~ ^[Yy]$ ]]; then
@@ -1549,7 +1558,7 @@ EOF
                     main_menu
                 fi
                 ;;
-            9) exit 0 ;;
+            10) exit 0 ;;
             *) echo -e "${RED}❌ Неверный выбор!${NC}" ; sleep 1 ; main_menu ;;
         esac
     }
@@ -1847,6 +1856,28 @@ if [ "$1" == "--update-geoblocks" ]; then
         generate_server_config
         echo "✅ Конфигурация Xray перегенерирована."
     fi
+    exit 0
+fi
+
+# === Обработка флага обновления ядра (update) ===
+if [ "$1" == "--update-core" ]; then
+    echo "🔄 Запуск автоматического обновления компонентов сервера..."
+    DOMAIN=$(get_installed_var "DOMAIN")
+    EMAIL=$(get_installed_var "EMAIL")
+    NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+    if [[ -z "$DOMAIN" || -z "$EMAIL" || -z "$NUM_DEVICES" ]]; then
+        echo "❌ Ошибка: Не найдены данные предыдущей установки в /etc/xray/.installed"
+        exit 1
+    fi
+    FLAG_EMOJI=$(get_flag_emoji)
+    install_dependencies
+    install_xray
+    generate_server_config
+    setup_subscription_server
+    generate_client_configs
+    install_generate_script
+    install_xry_command
+    echo "✅ Сервер успешно обновлен до последней версии! Можете вызвать xry для проверки."
     exit 0
 fi
 
