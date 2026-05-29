@@ -93,9 +93,13 @@ install_warp() {
     fi
 
     if [ -f "/etc/wireguard/warp.conf" ]; then
+        # Отключаем глобальную маршрутизацию через WARP (выборочно маршрутизируем через Xray)
         if ! grep -q "Table = off" /etc/wireguard/warp.conf; then
             sed -i '/\[Interface\]/a Table = off' /etc/wireguard/warp.conf
         fi
+        # Удаляем DNS из конфигурации WireGuard, чтобы wg-quick не ломал DNS в /etc/resolv.conf
+        sed -i '/^DNS\s*=/d' /etc/wireguard/warp.conf
+
         systemctl enable wg-quick@warp >/dev/null 2>&1
         systemctl start wg-quick@warp >/dev/null 2>&1
         echo "✅ Cloudflare WARP успешно установлен и запущен!"
@@ -387,6 +391,23 @@ exec > >(tee -a "$INSTALL_LOG") 2>&1
 echo "🔍 Проверка резолва домена..."
 check_domain() {
     if ! getent hosts "$DOMAIN" >/dev/null; then
+        echo "⚠️ Локальное разрешение домена не удалось, выполняем резервную проверку через внешние DNS..."
+        local resolved_ip
+        
+        # Запрос к Cloudflare DNS-over-HTTPS напрямую по IP 1.1.1.1 (не требует работающего DNS на сервере)
+        resolved_ip=$(curl -sH "accept: application/dns-json" --connect-timeout 5 "https://1.1.1.1/dns-query?name=$DOMAIN&type=A" | jq -r '.Answer[0].data' 2>/dev/null)
+        if [[ "$resolved_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ℹ️ Внешняя проверка через 1.1.1.1 подтвердила IP домена: $resolved_ip"
+            return 0
+        fi
+        
+        # Запрос к Google DNS-over-HTTPS напрямую по IP 8.8.8.8
+        resolved_ip=$(curl -sH "accept: application/dns-json" --connect-timeout 5 "https://8.8.8.8/resolve?name=$DOMAIN&type=A" | jq -r '.Answer[0].data' 2>/dev/null)
+        if [[ "$resolved_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ℹ️ Внешняя проверка через 8.8.8.8 подтвердила IP домена: $resolved_ip"
+            return 0
+        fi
+
         echo "❌ Домен '$DOMAIN' не резолвится. Проверьте DNS-записи (A-запись должна указывать на IP этого сервера)."
         exit 1
     fi
