@@ -749,6 +749,9 @@ generate_client_configs() {
     "streamSettings": {
       "network": "tcp",
       "security": "tls",
+      "tlsSettings": {
+        "fingerprint": "randomized"
+      },
       "sockopt": {
         "tcpFastOpen": true
       }
@@ -1065,7 +1068,7 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
 
         encoded_remark_vision = urllib.parse.quote(remark_vision)
         
-        vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=firefox&alpn=http/1.1#{encoded_remark_vision}"
+        vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=randomized&alpn=http/1.1#{encoded_remark_vision}"
         
         # Задаем комментарии с метаданными подписки (название, страница информации, анонсы)
         sub_content = f"#profile-title: {client_name}\n#profile-web-page-url: https://mvrvntn.github.io/koridor/\n#profile-notice: https://mvrvntn.github.io/koridor/\n#profile-announce: https://mvrvntn.github.io/koridor/\n#announce: https://mvrvntn.github.io/koridor/\n{vless_vision}\n"
@@ -1140,7 +1143,7 @@ CONFIG_DIR="/etc/xray/client_configs"
 DOMAIN=$(grep DOMAIN /etc/xray/.installed | cut -d= -f2)
 EMOJI=$(grep EMOJI /etc/xray/.installed | cut -d= -f2)
 FLOW="xtls-rprx-vision"
-FINGERPRINT="firefox"
+FINGERPRINT="randomized"
 PORT=443
 
 mapfile -t config_files < <(find "$CONFIG_DIR" -maxdepth 1 -name '*.json' | sort)
