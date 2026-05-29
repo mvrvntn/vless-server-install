@@ -507,6 +507,43 @@ EOF
     }
 
     echo "⚠️ Xray уже установлен"
+    
+    # Самодиагностика и исправление пустых/отсутствующих UUID
+    local repaired=false
+    if [ -d "$CLIENT_CONFIG_DIR" ]; then
+        for filepath in "$CLIENT_CONFIG_DIR"/*.json; do
+            [ -e "$filepath" ] || continue
+            local uuid=$(jq -r '.id' "$filepath" 2>/dev/null)
+            if [ -z "$uuid" ] || [ "$uuid" == "null" ] || [ ${#uuid} -lt 30 ]; then
+                local new_uuid=$(xray uuid)
+                echo "⚙️ Обнаружен некорректный UUID в $(basename "$filepath"). Исправление..."
+                
+                # Обновляем id в json-файле клиента
+                local temp_json=$(mktemp)
+                jq --arg new_id "$new_uuid" '.id = $new_id | .outbounds[0].settings.vnext[0].users[0].id = $new_id' "$filepath" > "$temp_json" 2>/dev/null
+                if [ $? -eq 0 ] && [ -s "$temp_json" ]; then
+                    mv "$temp_json" "$filepath"
+                    chown nobody:nogroup "$filepath"
+                    chmod 644 "$filepath"
+                    repaired=true
+                else
+                    # Резервный вариант с sed
+                    sed -i -E "s/\"id\":\s*\"[^\"]*\"/\"id\": \"$new_uuid\"/g" "$filepath"
+                    repaired=true
+                fi
+            fi
+        done
+    fi
+
+    if [ "$repaired" = true ]; then
+        echo "🔄 Пересборка конфигурации сервера после исправления..."
+        DOMAIN=$(get_installed_var "DOMAIN")
+        NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+        generate_server_config
+        install_generate_script
+        echo "✅ Восстановление успешно завершено!"
+    fi
+
     main_menu
     exit 0
 fi
@@ -1321,8 +1358,8 @@ fi
 
 echo -e "\nДоступные конфиги:"
 for i in "${!config_files[@]}"; do
-  remarks=$(grep -oP '(?<="remarks": ")[^"]+' "${config_files[$i]}" | head -1)
-  if [ -z "$remarks" ]; then
+  remarks=$(jq -r '.remarks' "${config_files[$i]}" 2>/dev/null)
+  if [ -z "$remarks" ] || [ "$remarks" = "null" ]; then
     remarks="${config_files[$i]##*/}"
     remarks="${remarks%.json}"
   fi
@@ -1336,9 +1373,9 @@ if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#co
 fi
 
 selected="${config_files[$((choice-1))]}"
-UUID=$(grep -oP '(?<="id": ")[^"]+' "$selected" | head -1)
-remarks=$(grep -oP '(?<="remarks": ")[^"]+' "$selected" | head -1)
-if [ -z "$remarks" ]; then
+UUID=$(jq -r '.id' "$selected" 2>/dev/null)
+remarks=$(jq -r '.remarks' "$selected" 2>/dev/null)
+if [ -z "$remarks" ] || [ "$remarks" = "null" ]; then
   remarks="${selected##*/}"
   remarks="${remarks%.json}"
 fi
