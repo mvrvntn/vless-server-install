@@ -15,19 +15,294 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# === Вспомогательные функции для работы с маркером ===
+get_installed_var() {
+    local var_name="$1"
+    if [ -f "$MARKER_FILE" ]; then
+        grep "^${var_name}=" "$MARKER_FILE" | cut -d= -f2-
+    fi
+}
+
+update_marker_val() {
+    local var_name="$1"
+    local new_val="$2"
+    mkdir -p "$(dirname "$MARKER_FILE")"
+    touch "$MARKER_FILE"
+    if grep -q "^${var_name}=" "$MARKER_FILE"; then
+        local escaped_val=$(echo "$new_val" | sed 's/[\/&]/\\&/g')
+        sed -i "s/^${var_name}=.*/${var_name}=${escaped_val}/" "$MARKER_FILE"
+    else
+        echo "${var_name}=${new_val}" >> "$MARKER_FILE"
+    fi
+}
+
+# === Управление Cloudflare WARP ===
+install_warp() {
+    echo "🌀 Установка Cloudflare WARP..."
+    if ! command -v wg-quick &>/dev/null || ! command -v wireguard &>/dev/null; then
+        echo "📦 Установка WireGuard..."
+        apt update >/dev/null
+        apt install -y wireguard wireguard-tools resolvconf >/dev/null
+    fi
+
+    if [ ! -f "/etc/wireguard/warp.conf" ]; then
+        echo "📥 Загрузка и запуск скрипта установки warp-native..."
+        local temp_dir=$(mktemp -d)
+        curl -sL https://raw.githubusercontent.com/distillium/warp-native/main/install.sh -o "$temp_dir/install.sh"
+        chmod +x "$temp_dir/install.sh"
+        # Запускаем скрипт неинтерактивно с выбором английского языка и значений по умолчанию
+        (cd "$temp_dir" && printf "1\n\n\n" | bash install.sh)
+        rm -rf "$temp_dir"
+    fi
+
+    if [ -f "/etc/wireguard/warp.conf" ]; then
+        if ! grep -q "Table = off" /etc/wireguard/warp.conf; then
+            sed -i '/\[Interface\]/a Table = off' /etc/wireguard/warp.conf
+        fi
+        systemctl enable wg-quick@warp >/dev/null 2>&1
+        systemctl start wg-quick@warp >/dev/null 2>&1
+        echo "✅ Cloudflare WARP успешно установлен и запущен!"
+        update_marker_val "WARP_INSTALLED" "true"
+        update_marker_val "WARP_ENABLED" "true"
+    else
+        echo "❌ Ошибка при генерации конфигурации WARP"
+        return 1
+    fi
+}
+
+toggle_warp() {
+    local current_status=$(get_installed_var "WARP_ENABLED")
+    if [ "$current_status" == "true" ]; then
+        echo "📴 Отключение обхода через WARP (возврат к прямому выходу)..."
+        update_marker_val "WARP_ENABLED" "false"
+        systemctl stop wg-quick@warp >/dev/null 2>&1
+    else
+        echo "🌀 Включение обхода через WARP..."
+        if [ "$(get_installed_var "WARP_INSTALLED")" != "true" ]; then
+            install_warp || return 1
+        fi
+        systemctl start wg-quick@warp >/dev/null 2>&1
+        update_marker_val "WARP_ENABLED" "true"
+    fi
+
+    DOMAIN=$(get_installed_var "DOMAIN")
+    EMAIL=$(get_installed_var "EMAIL")
+    NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+    generate_server_config
+    echo "✅ Статус WARP обновлен и Xray перезапущен!"
+}
+
 # === Проверка предыдущей установки (до запроса данных) ===
 if [ -f "$MARKER_FILE" ]; then
+    show_connections() {
+        echo -e "\n--- Активные подключения к Xray ---"
+        local conns=$(ss -tnp | grep -E ':443\s' | grep -v '127.0.0.1')
+        if [ -z "$conns" ]; then
+            echo "Нет активных подключений на порт 443."
+        else
+            echo "Состояние Локальный_Адрес Удаленный_Адрес Процесс"
+            echo "$conns" | awk '{print $1, $4, $5, $6}'
+        fi
+    }
+
+    show_logs() {
+        echo -e "\n--- Выберите лог для просмотра ---"
+        echo "1. Лог Xray (systemd)"
+        echo "2. Лог Сервера подписок (systemd)"
+        echo "3. Лог ошибок Xray (/var/log/xray/error.log)"
+        echo "4. Назад"
+        read -p "Выбор (1-4): " lchoice
+        case $lchoice in
+            1) journalctl -u xray -n 50 --no-pager ;;
+            2) journalctl -u xray-sub -n 50 --no-pager ;;
+            3) tail -n 50 /var/log/xray/error.log ;;
+            4) return ;;
+            *) echo "Неверный выбор" ;;
+        esac
+    }
+
+    add_client() {
+        echo -e "\n--- Добавление нового клиента ---"
+        read -p "Введите имя нового устройства (например: client_new): " new_name
+        new_name=$(echo "$new_name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        if [[ -z "$new_name" ]]; then
+            echo "❌ Имя не может быть пустым"
+            return
+        fi
+
+        local safe_filename=$(echo "$new_name" | tr -cd '[:alnum:]_.-' | tr '[:upper:]' '[:lower:]')
+        if [[ -z "$safe_filename" ]]; then
+            safe_filename="client_new"
+        fi
+
+        if [ -f "$CLIENT_CONFIG_DIR/${safe_filename}.json" ]; then
+            echo "❌ Клиент с таким именем уже существует!"
+            return
+        fi
+
+        local new_uuid=$(xray uuid)
+        DOMAIN=$(get_installed_var "DOMAIN")
+
+        cat > "$CLIENT_CONFIG_DIR/${safe_filename}.json" <<EOF
+{
+  "remarks": "$new_name",
+  "id": "$new_uuid",
+  "outbounds": [{
+    "protocol": "vless",
+    "settings": {
+      "vnext": [{
+        "address": "$DOMAIN",
+        "port": 443,
+        "users": [{
+          "id": "$new_uuid",
+          "flow": "xtls-rprx-vision"
+        }]
+      }]
+    },
+    "streamSettings": {
+      "network": "tcp",
+      "security": "tls",
+      "sockopt": {
+        "tcpFastOpen": true
+      }
+    }
+  }]
+}
+EOF
+        # Устанавливаем права
+        chmod 644 "$CLIENT_CONFIG_DIR/${safe_filename}.json"
+        chown nobody:nogroup "$CLIENT_CONFIG_DIR/${safe_filename}.json"
+
+        # Обновляем конфиг сервера и перезапускаем xray
+        generate_server_config
+
+        # Обновляем маркер
+        local current_num=$(find "$CLIENT_CONFIG_DIR" -maxdepth 1 -name '*.json' | wc -l)
+        update_marker_val "NUM_DEVICES" "$current_num"
+
+        echo "✅ Клиент '$new_name' успешно добавлен!"
+    }
+
+    remove_client() {
+        echo -e "\n--- Удаление клиента ---"
+        mapfile -t config_files < <(find "$CLIENT_CONFIG_DIR" -maxdepth 1 -name '*.json' | sort)
+        if [ ${#config_files[@]} -eq 0 ]; then
+            echo "❌ Нет доступных клиентов для удаления"
+            return
+        fi
+
+        for i in "${!config_files[@]}"; do
+            remarks=$(grep -oP '(?<="remarks": ")[^"]+' "${config_files[$i]}" | head -1)
+            if [ -z "$remarks" ]; then
+                remarks="${config_files[$i]##*/}"
+                remarks="${remarks%.json}"
+            fi
+            echo "$((i+1)). $remarks"
+        done
+
+        read -p "Выберите клиента для удаления (1-${#config_files[@]}): " choice
+        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#config_files[@]} ]; then
+            echo "❌ Неверный выбор"
+            return
+        fi
+
+        selected="${config_files[$((choice-1))]}"
+        remarks=$(grep -oP '(?<="remarks": ")[^"]+' "$selected" | head -1)
+        if [ -z "$remarks" ]; then
+            remarks="${selected##*/}"
+            remarks="${remarks%.json}"
+        fi
+
+        read -p "Вы уверены, что хотите удалить клиента '$remarks'? (y/n): " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            rm -f "$selected"
+            # Обновляем конфиг сервера и перезапускаем xray
+            generate_server_config
+
+            # Обновляем маркер
+            local current_num=$(find "$CLIENT_CONFIG_DIR" -maxdepth 1 -name '*.json' | wc -l)
+            update_marker_val "NUM_DEVICES" "$current_num"
+
+            echo "✅ Клиент '$remarks' успешно удален!"
+        else
+            echo "Отмена."
+        fi
+    }
+
     main_menu() {
+        local warp_installed=$(get_installed_var "WARP_INSTALLED")
+        local warp_enabled=$(get_installed_var "WARP_ENABLED")
+        local warp_status="Не установлен"
+        if [ "$warp_installed" == "true" ]; then
+            if [ "$warp_enabled" == "true" ]; then
+                warp_status="Включен"
+            else
+                warp_status="Выключен"
+            fi
+        fi
+
         echo -e "\n==== Xray Меню ===="
         echo "1. Показать QR-код / Ссылки"
-        echo "2. Удалить Xray"
-        echo "3. Выйти"
+        echo "2. Добавить нового клиента"
+        echo "3. Удалить существующего клиента"
+        echo "4. Управление Cloudflare WARP (Статус: $warp_status)"
+        echo "5. Просмотреть логи"
+        echo "6. Активные подключения"
+        echo "7. Удалить Xray из системы"
+        echo "8. Выйти"
         read -p "Выбор: " choice
         case $choice in
-            1) "$GENERATE_SCRIPT" ;;
-            2) uninstall_all ;;
-            3) exit 0 ;;
+            1) "$GENERATE_SCRIPT" ; main_menu ;;
+            2) add_client ; main_menu ;;
+            3) remove_client ; main_menu ;;
+            4) warp_menu ;;
+            5) show_logs ; main_menu ;;
+            6) show_connections ; main_menu ;;
+            7) uninstall_all ;;
+            8) exit 0 ;;
             *) echo "Неверный выбор"; main_menu ;;
+        esac
+    }
+
+    warp_menu() {
+        local warp_installed=$(get_installed_var "WARP_INSTALLED")
+        local warp_enabled=$(get_installed_var "WARP_ENABLED")
+        
+        echo -e "\n--- Управление Cloudflare WARP ---"
+        if [ "$warp_installed" != "true" ]; then
+            echo "1. Установить и включить WARP"
+        else
+            if [ "$warp_enabled" == "true" ]; then
+                echo "1. Отключить WARP (прямой выход)"
+            else
+                echo "1. Включить WARP"
+            fi
+            echo "2. Переустановить/Обновить WARP"
+        fi
+        echo "3. Назад"
+        read -p "Выбор: " wchoice
+        case $wchoice in
+            1)
+                if [ "$warp_installed" != "true" ]; then
+                    install_warp
+                else
+                    toggle_warp
+                fi
+                warp_menu
+                ;;
+            2)
+                if [ "$warp_installed" == "true" ]; then
+                    install_warp
+                fi
+                warp_menu
+                ;;
+            3)
+                main_menu
+                ;;
+            *)
+                echo "Неверный выбор"
+                warp_menu
+                ;;
         esac
     }
 
@@ -39,6 +314,16 @@ if [ -f "$MARKER_FILE" ]; then
         rm -f /etc/systemd/system/xray-sub.service
         systemctl daemon-reload >/dev/null 2>&1
         rm -f "$SUB_SERVER_SCRIPT"
+
+        # Удаление Cloudflare WARP
+        systemctl stop wg-quick@warp >/dev/null 2>&1
+        systemctl disable wg-quick@warp >/dev/null 2>&1
+        rm -f /etc/cron.d/warp-native
+        rm -rf /opt/warp-native
+        rm -f /usr/local/bin/warp
+        rm -f /etc/wireguard/warp.conf
+        rm -f /usr/local/bin/wgcf
+        rm -f /root/wgcf-account.toml /root/wgcf-profile.conf
 
         bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove
         rm -rf "$XRAY_CONFIG_DIR" "$CLIENT_CONFIG_DIR" "$SSL_DIR" "$GENERATE_SCRIPT"
@@ -127,6 +412,18 @@ install_dependencies() {
     echo "📦 Установка зависимостей..."
     apt update > /dev/null
     apt install -y curl qrencode ufw cron certbot python3 jq lsof > /dev/null
+
+    echo "⚡ Включение BBR и TCP Fast Open..."
+    # Включаем BBR и FQ
+    if ! sysctl net.ipv4.tcp_congestion_control | grep -q "bbr"; then
+        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    fi
+    # Включаем TCP Fast Open (значение 3 включает и на отправку, и на прием данных)
+    if ! sysctl net.ipv4.tcp_fastopen | grep -q "3"; then
+        echo "net.ipv4.tcp_fastopen=3" >> /etc/sysctl.conf
+    fi
+    sysctl -p > /dev/null 2>&1
 }
 
 # === Установка Xray ===
@@ -183,19 +480,93 @@ generate_server_config() {
     # Инициализация массивов для клиентов
     local vless_clients=()
     
-    # Генерация уникальных UUID для каждого устройства
-    for i in $(seq 1 "$NUM_DEVICES"); do
-        local uuid=$(xray uuid)
-        UUIDs[$i]="$uuid"
-        
-        vless_clients+=("{
-          \"id\": \"$uuid\",
-          \"flow\": \"xtls-rprx-vision\",
-          \"email\": \"client-$i\"
-        }")
-    done
+    # Проверяем, есть ли уже клиенты
+    if [ -d "$CLIENT_CONFIG_DIR" ] && [ "$(find "$CLIENT_CONFIG_DIR" -name '*.json' 2>/dev/null | wc -l)" -gt 0 ]; then
+        local idx=1
+        for filepath in $(find "$CLIENT_CONFIG_DIR" -maxdepth 1 -name '*.json' | sort); do
+            local uuid=$(jq -r '.id' "$filepath" 2>/dev/null)
+            if [ -n "$uuid" ] && [ "$uuid" != "null" ]; then
+                UUIDs[$idx]="$uuid"
+                vless_clients+=("{
+                  \"id\": \"$uuid\",
+                  \"flow\": \"xtls-rprx-vision\",
+                  \"email\": \"client-$idx\"
+                }")
+                idx=$((idx + 1))
+            fi
+        done
+    else
+        # Генерация уникальных UUID для каждого устройства (первоначальная установка)
+        for i in $(seq 1 "$NUM_DEVICES"); do
+            local uuid=$(xray uuid)
+            UUIDs[$i]="$uuid"
+            
+            vless_clients+=("{
+              \"id\": \"$uuid\",
+              \"flow\": \"xtls-rprx-vision\",
+              \"email\": \"client-$i\"
+            }")
+        done
+    fi
     
     local vless_clients_str=$(IFS=,; echo "${vless_clients[*]}")
+    
+    # Проверяем статус WARP
+    local warp_enabled=$(get_installed_var "WARP_ENABLED")
+    local outbounds_str
+    
+    if [ "$warp_enabled" == "true" ]; then
+        outbounds_str='[
+    {
+      "tag": "WARP",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "interface": "warp",
+          "tcpFastOpen": true
+        }
+      }
+    },
+    {
+      "tag": "DIRECT",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tcpFastOpen": true
+        }
+      }
+    },
+    {
+      "tag": "BLOCK",
+      "protocol": "blackhole"
+    }
+  ]'
+    else
+        outbounds_str='[
+    {
+      "tag": "DIRECT",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tcpFastOpen": true
+        }
+      }
+    },
+    {
+      "tag": "BLOCK",
+      "protocol": "blackhole"
+    }
+  ]'
+    fi
     
     # Генерация конфигурационного файла с VLESS TCP
     cat > "$config_file" <<EOF
@@ -238,23 +609,14 @@ generate_server_config() {
             "keyFile": "$SSL_DIR/private.key"
           }],
           "alpn": ["http/1.1"]
+        },
+        "sockopt": {
+          "tcpFastOpen": true
         }
       }
     }
   ],
-  "outbounds": [
-    {
-      "tag": "DIRECT",
-      "protocol": "freedom",
-      "settings": {
-        "domainStrategy": "UseIPv4"
-      }
-    },
-    {
-      "tag": "BLOCK",
-      "protocol": "blackhole"
-    }
-  ],
+  "outbounds": $outbounds_str,
   "routing": {
     "rules": [
       {
@@ -314,7 +676,10 @@ generate_client_configs() {
     },
     "streamSettings": {
       "network": "tcp",
-      "security": "tls"
+      "security": "tls",
+      "sockopt": {
+        "tcpFastOpen": true
+      }
     }
   }]
 }
@@ -354,6 +719,183 @@ _ROSCOMVPN_URLS = {
     "jsonsub": "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main/HAPP/JSONSUB.DEEPLINK",
     "whitelist": "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main/HAPP/WHITELIST.DEEPLINK",
 }
+
+DECOY_HTML = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Вход в Confluence</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+            background-color: #f4f5f7;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .login-container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
+            width: 350px;
+            text-align: center;
+        }
+        .logo { margin-bottom: 20px; }
+        .logo img { width: 120px; }
+        h2 { margin-bottom: 20px; font-size: 24px; color: #0052cc; }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #dfe1e6;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        .error { border-color: red; }
+        .error-message { color: red; font-size: 14px; display: none; margin-top: 10px; }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #0052cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 20px;
+        }
+        button:hover { background-color: #0747a6; }
+        .help-links { margin-top: 20px; font-size: 14px; }
+        .help-links a { color: #0052cc; text-decoration: none; }
+        .help-links a:hover { text-decoration: underline; }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+            padding-top: 60px;
+        }
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 400px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .close:hover, .close:focus { color: black; text-decoration: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+<div class="login-container">
+    <div class="logo">
+        <img src="https://cdn.icon-icons.com/icons2/2429/PNG/512/confluence_logo_icon_147305.png" alt="Confluence">
+    </div>
+    <h2 id="login-title">Войти в Confluence</h2>
+    <form id="login-form">
+        <input type="text" id="username" name="username" placeholder="Адрес электронной почты">
+        <input type="password" id="password" name="password" placeholder="Введите пароль">
+        <button type="submit" id="login-button">Войти</button>
+    </form>
+    <div id="error-message" class="error-message">Неправильное имя пользователя или пароль.</div>
+    <div class="help-links">
+        <a href="#" id="forgot-link">Не удается войти?</a> • <a href="#" id="create-link">Создать аккаунт</a>
+    </div>
+</div>
+<div id="myModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <p id="modal-text">Для создания аккаунта обратитесь к администратору.</p>
+    </div>
+</div>
+<script>
+    function setLanguage(lang) {
+        const elements = {
+            "ru": {
+                loginTitle: "Войти в Confluence",
+                usernamePlaceholder: "Адрес электронной почты",
+                passwordPlaceholder: "Введите пароль",
+                loginButton: "Войти",
+                forgotLink: "Не удается войти?",
+                createLink: "Создать аккаунт",
+                createAccountText: "Для создания аккаунта обратитесь к администратору.",
+                forgotPasswordText: "Для восстановления доступа обратитесь к администратору.",
+                errorMessage: "Неправильное имя пользователя или пароль."
+            },
+            "en": {
+                loginTitle: "Login to Confluence",
+                usernamePlaceholder: "Email address",
+                passwordPlaceholder: "Enter password",
+                loginButton: "Login",
+                forgotLink: "Can't log in?",
+                createLink: "Create an account",
+                createAccountText: "To create an account, please contact your administrator.",
+                forgotPasswordText: "To recover access, please contact your administrator.",
+                errorMessage: "Incorrect username or password."
+            }
+        };
+        document.getElementById('login-title').innerText = elements[lang].loginTitle;
+        document.getElementById('username').placeholder = elements[lang].usernamePlaceholder;
+        document.getElementById('password').placeholder = elements[lang].passwordPlaceholder;
+        document.getElementById('login-button').innerText = elements[lang].loginButton;
+        document.getElementById('forgot-link').innerText = elements[lang].forgotLink;
+        document.getElementById('create-link').innerText = elements[lang].createLink;
+        document.getElementById('create-link').dataset.modalText = elements[lang].createAccountText;
+        document.getElementById('forgot-link').dataset.modalText = elements[lang].forgotPasswordText;
+        document.getElementById('error-message').innerText = elements[lang].errorMessage;
+    }
+    function detectLanguage() {
+        const userLang = navigator.language || navigator.userLanguage;
+        if (userLang.startsWith('ru')) { setLanguage('ru'); } else { setLanguage('en'); }
+    }
+    document.addEventListener('DOMContentLoaded', detectLanguage);
+    var modal = document.getElementById("myModal");
+    var span = document.getElementsByClassName("close")[0];
+    function openModal(text) {
+        document.getElementById('modal-text').innerText = text;
+        modal.style.display = "block";
+    }
+    document.getElementById("create-link").onclick = function(event) {
+        event.preventDefault();
+        openModal(this.dataset.modalText);
+    }
+    document.getElementById("forgot-link").onclick = function(event) {
+        event.preventDefault();
+        openModal(this.dataset.modalText);
+    }
+    span.onclick = function() { modal.style.display = "none"; }
+    window.onclick = function(event) {
+        if (event.target == modal) { modal.style.display = "none"; }
+    }
+    document.getElementById('login-form').onsubmit = function(event) {
+        event.preventDefault();
+        var username = document.getElementById('username');
+        var password = document.getElementById('password');
+        var errorMessage = document.getElementById('error-message');
+        username.classList.remove('error');
+        password.classList.remove('error');
+        errorMessage.style.display = 'none';
+        var hasError = false;
+        if (username.value.trim() === '') { username.classList.add('error'); hasError = true; }
+        if (password.value.trim() === '') { password.classList.add('error'); hasError = true; }
+        if (hasError) { return; }
+        errorMessage.style.display = 'block';
+    };
+</script>
+</body>
+</html>"""
 
 class RoscomVPNResolver:
     def __init__(self, default_source="default"):
@@ -408,42 +950,37 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         return
 
     def do_GET(self):
-        # Парсим URL, чтобы убрать query-параметры (например, ?flag=1)
         parsed_url = urllib.parse.urlparse(self.path)
         parts = parsed_url.path.strip("/").split("/")
         
-        if len(parts) != 2 or parts[0] != "sub":
-            self.send_response(404)
-            self.end_headers()
-            return
-        
-        uuid_param = parts[1]
+        uuid_param = parts[1] if (len(parts) == 2 and parts[0] == "sub") else None
         
         # Проверяем UUID среди сохраненных клиентских конфигов
         client_name = ""
         found = False
-        for filepath in glob.glob(os.path.join(CONFIG_DIR, "*.json")):
-            try:
-                with open(filepath, "r") as f:
-                    data = json.load(f)
-                    if data.get("id") == uuid_param:
-                        client_name = data.get("remarks", "client")
-                        found = True
-                        break
-            except Exception:
-                pass
+        if uuid_param:
+            for filepath in glob.glob(os.path.join(CONFIG_DIR, "*.json")):
+                try:
+                    with open(filepath, "r") as f:
+                        data = json.load(f)
+                        if data.get("id") == uuid_param:
+                            client_name = data.get("remarks", "client")
+                            found = True
+                            break
+                except Exception:
+                    pass
         
         if not found:
-            self.send_response(404)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
+            self.wfile.write(DECOY_HTML.encode("utf-8"))
             return
         
         domain, emoji = get_domain_and_emoji()
         if not domain:
             domain = self.headers.get('Host', '').split(':')[0]
 
-        # Генерация ссылок по структуре:
-        # ФЛАГ🌐 VLESS-TCP (имя)
         if emoji:
             remark_vision = f"{emoji}🌐 VLESS-TCP ({client_name})"
         else:
@@ -456,7 +993,6 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         sub_content = f"{vless_vision}\n"
         b64_content = base64.b64encode(sub_content.encode("utf-8")).decode("utf-8")
         
-        # Получаем актуальный роутинг
         _routing = roscomvpn_resolver.get()
 
         self.send_response(200)
