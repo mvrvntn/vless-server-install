@@ -340,11 +340,53 @@ import base64
 import os
 import glob
 import urllib.parse
+import urllib.request
 import json
+import threading
+import time as _time
 
 PORT = 10080
 CONFIG_DIR = "/etc/xray/client_configs"
 INSTALLED_FILE = "/etc/xray/.installed"
+
+_ROSCOMVPN_URLS = {
+    "default": "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main/HAPP/DEFAULT.DEEPLINK",
+    "jsonsub": "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main/HAPP/JSONSUB.DEEPLINK",
+    "whitelist": "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/main/HAPP/WHITELIST.DEEPLINK",
+}
+
+class RoscomVPNResolver:
+    def __init__(self, default_source="default"):
+        self._lock = threading.Lock()
+        self._value = ""
+        self._fetched_at = 0.0
+        self._last_fail = 0.0
+        self._source = default_source
+
+    def get(self) -> str:
+        url = _ROSCOMVPN_URLS.get(self._source)
+        if not url:
+            return ""
+        now = _time.monotonic()
+        if self._value and (now - self._fetched_at) < 600:
+            return self._value
+        if self._last_fail and (now - self._last_fail) < 30:
+            return self._value
+        with self._lock:
+            now = _time.monotonic()
+            if self._value and (now - self._fetched_at) < 600:
+                return self._value
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=4) as response:
+                    self._value = response.read().decode('utf-8').strip()
+                self._fetched_at = now
+                self._last_fail = 0.0
+            except Exception:
+                self._last_fail = now
+        return self._value
+
+roscomvpn_resolver = RoscomVPNResolver("default")
 
 def get_domain_and_emoji():
     domain = ""
@@ -414,9 +456,15 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         sub_content = f"{vless_vision}\n"
         b64_content = base64.b64encode(sub_content.encode("utf-8")).decode("utf-8")
         
+        # Получаем актуальный роутинг
+        _routing = roscomvpn_resolver.get()
+
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        if _routing:
+            self.send_header("routing", _routing)
+            self.send_header("routing-enable", "true")
         self.end_headers()
         self.wfile.write(b64_content.encode("utf-8"))
 
