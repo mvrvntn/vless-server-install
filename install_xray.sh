@@ -557,6 +557,36 @@ EOF
         esac
     }
 
+    uninstall_warp() {
+        echo -e "\n${BOLD}${RED}🧹 Полное удаление Cloudflare WARP с сервера...${NC}"
+        
+        systemctl stop wg-quick@warp >/dev/null 2>&1
+        systemctl disable wg-quick@warp >/dev/null 2>&1
+        rm -f /etc/cron.d/warp-native
+        rm -rf /opt/warp-native
+        rm -f /usr/local/bin/warp
+        rm -f /etc/wireguard/warp.conf
+        rm -f /usr/local/bin/wgcf
+        rm -f /root/wgcf-account.toml /root/wgcf-profile.conf
+        rm -f /etc/xray/geoblock.lst
+        
+        # Удаление задачи автообновления из cron
+        if crontab -l &>/dev/null; then
+            crontab -l | grep -v "update-geoblocks" | crontab -
+        fi
+        
+        update_marker_val "WARP_INSTALLED" "false"
+        update_marker_val "WARP_ENABLED" "false"
+        update_marker_val "WARP_MODE" "smart"
+        
+        DOMAIN=$(get_installed_var "DOMAIN")
+        NUM_DEVICES=$(get_installed_var "NUM_DEVICES")
+        generate_server_config
+        
+        echo -e "${GREEN}✅ Cloudflare WARP успешно и полностью удален с сервера!${NC}"
+        sleep 1.5
+    }
+
     warp_menu() {
         local warp_installed=$(get_installed_var "WARP_INSTALLED")
         local warp_enabled=$(get_installed_var "WARP_ENABLED")
@@ -608,9 +638,10 @@ EOF
             echo -e " ${BOLD}${YELLOW}2.${NC} ⚙️ Переключить режим работы WARP (Smart / Full)"
             echo -e " ${BOLD}${YELLOW}3.${NC} 🔄 Принудительно обновить список геоблокировок"
             echo -e " ${BOLD}${YELLOW}4.${NC} ⚡ Переустановить/Обновить WireGuard профиль WARP"
-            echo -e " ${BOLD}${CYAN}5.${NC} ↩️ Назад в главное меню"
+            echo -e " ${BOLD}${RED}5.${NC} 🗑️ Полностью удалить Cloudflare WARP с сервера"
+            echo -e " ${BOLD}${CYAN}6.${NC} ↩️ Назад в главное меню"
             echo -e "${PURPLE}──────────────────────────────────────────────────────────${NC}"
-            read -p "Выберите действие (1-5): " wchoice
+            read -p "Выберите действие (1-6): " wchoice
             case $wchoice in
                 1)
                     toggle_warp
@@ -652,6 +683,10 @@ EOF
                     warp_menu
                     ;;
                 5)
+                    uninstall_warp
+                    warp_menu
+                    ;;
+                6)
                     main_menu
                     ;;
                 *)
@@ -1056,6 +1091,56 @@ generate_server_config() {
     
     local outbounds_str
     local routing_rules_str=""
+    local warp_check_rules_str=""
+    
+    if [ "$warp_enabled" == "true" ]; then
+        warp_check_rules_str=",
+      {
+        \"type\": \"field\",
+        \"domain\": [
+          \"domain:whoer.net\",
+          \"domain:browserleaks.com\",
+          \"domain:2ip.io\",
+          \"domain:2ip.ru\",
+          \"domain:2ip.ua\",
+          \"domain:ipleak.net\",
+          \"domain:ipinfo.io\",
+          \"domain:whatismyip.com\",
+          \"domain:whatismyipaddress.com\",
+          \"domain:iplocation.net\",
+          \"domain:dnsleaktest.com\",
+          \"domain:dnsleak.com\",
+          \"domain:am.i.mullvad.net\",
+          \"domain:myip.com\",
+          \"domain:myip.ru\",
+          \"domain:ip.me\",
+          \"domain:ifconfig.me\",
+          \"domain:ident.me\",
+          \"domain:checkip.amazonaws.com\",
+          \"domain:ip-api.com\",
+          \"domain:ipify.org\",
+          \"domain:icanhazip.com\",
+          \"domain:ip-score.com\",
+          \"domain:doileak.com\",
+          \"domain:bash.ws\",
+          \"domain:f.vision\",
+          \"domain:amiunique.org\",
+          \"domain:deviceinfo.me\",
+          \"domain:coveryourtracks.eff.org\",
+          \"domain:showmyip.com\",
+          \"domain:ip8.com\",
+          \"domain:gemini.google.com\",
+          \"domain:generativelanguage.googleapis.com\",
+          \"domain:accounts.google.com\",
+          \"domain:googleapis.com\",
+          \"domain:gstatic.com\",
+          \"domain:googleusercontent.com\",
+          \"domain:webrtc.org\",
+          \"domain:stun.l.google.com\"
+        ],
+        \"outboundTag\": \"WARP\"
+      }"
+    fi
     
     if [ "$warp_enabled" == "true" ]; then
         if [ "$warp_mode" == "full" ]; then
@@ -1237,7 +1322,7 @@ generate_server_config() {
           "bittorrent"
         ],
         "outboundTag": "BLOCK"
-      }${routing_rules_str}
+      }${routing_rules_str}${warp_check_rules_str}
     ]
   }
 }
@@ -1656,6 +1741,15 @@ install_generate_script() {
     cat > "$GENERATE_SCRIPT" <<'EOF'
 #!/bin/bash
 
+# Цвета для красивого вывода
+BOLD='\033[1m'
+NC='\033[0m'
+CYAN='\033[0;36m'
+PURPLE='\033[0;35m'
+YELLOW='\033[0;33m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+
 CONFIG_DIR="/etc/xray/client_configs"
 DOMAIN=$(grep DOMAIN /etc/xray/.installed | cut -d= -f2)
 EMOJI=$(grep EMOJI /etc/xray/.installed | cut -d= -f2)
@@ -1666,23 +1760,26 @@ PORT=443
 mapfile -t config_files < <(find "$CONFIG_DIR" -maxdepth 1 -name '*.json' | sort)
 
 if [ ${#config_files[@]} -eq 0 ]; then
-  echo "❌ Конфиги не найдены!"
+  echo -e "${RED}❌ Конфиги не найдены!${NC}"
   exit 1
 fi
 
-echo -e "\nДоступные конфиги:"
+echo -e "\n${BOLD}${CYAN}┌────────────────────────────────────────────────────────┐${NC}"
+echo -e "${BOLD}${CYAN}│                 Доступные устройства                  │${NC}"
+echo -e "${BOLD}${CYAN}└────────────────────────────────────────────────────────┘${NC}"
 for i in "${!config_files[@]}"; do
   remarks=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1])).get('remarks', ''))" "${config_files[$i]}" 2>/dev/null)
   if [ -z "$remarks" ] || [ "$remarks" = "null" ]; then
     remarks="${config_files[$i]##*/}"
     remarks="${remarks%.json}"
   fi
-  echo "$((i+1)). $remarks"
+  echo -e " ${BOLD}${YELLOW}$((i+1)).${NC} 📱 $remarks"
 done
+echo -e "${CYAN}──────────────────────────────────────────────────────────${NC}"
 
-read -p "Выберите конфиг (1-${#config_files[@]}): " choice
+read -p "Выберите устройство (1-${#config_files[@]}): " choice
 if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#config_files[@]} ]; then
-  echo "Неверный выбор!"
+  echo -e "${RED}❌ Неверный выбор!${NC}"
   exit 1
 fi
 
@@ -1711,21 +1808,27 @@ encoded_remark_vision=$(urlencode "$remark_vision")
 VLESS_VISION="vless://${UUID}@${DOMAIN}:${PORT}?flow=${FLOW}&security=tls&type=tcp&fp=${FINGERPRINT}&alpn=h2,http/1.1#${encoded_remark_vision}"
 SUBSCRIPTION_URL="https://${DOMAIN}/sub/${UUID}"
 
-echo -e "\n=== Ссылки для подключения ==="
-echo -e "\n1. VLESS TCP Vision (Стандарт):"
-echo "$VLESS_VISION"
-echo -e "\n2. Ссылка подписки (импорт в клиент):"
-echo "$SUBSCRIPTION_URL"
+echo -e "\n${BOLD}${PURPLE}┌────────────────────────────────────────────────────────┐${NC}"
+echo -e "${BOLD}${PURPLE}│                Ссылки для подключения                  │${NC}"
+echo -e "${BOLD}${PURPLE}└────────────────────────────────────────────────────────┘${NC}"
+echo -e " ${BOLD}${YELLOW}1. VLESS TCP Vision (Стандарт):${NC}"
+echo -e "    ${GREEN}$VLESS_VISION${NC}"
+echo -e "\n ${BOLD}${YELLOW}2. Ссылка подписки (импорт в клиент):${NC}"
+echo -e "    ${CYAN}$SUBSCRIPTION_URL${NC}"
+echo -e "${PURPLE}──────────────────────────────────────────────────────────${NC}"
 
-echo -e "\n=== Генерация QR-кода ==="
-echo "Выберите, для чего отобразить QR-код:"
-echo "1. VLESS TCP Vision"
-echo "2. Ссылка подписки (импорт в клиент)"
-read -p "Выбор (1-2): " qr_choice
+echo -e "\n${BOLD}${CYAN}┌────────────────────────────────────────────────────────┐${NC}"
+echo -e "${BOLD}${CYAN}│                   Генерация QR-кода                    │${NC}"
+echo -e "${BOLD}${CYAN}└────────────────────────────────────────────────────────┘${NC}"
+echo -e " Выберите, для чего отобразить QR-код:"
+echo -e " ${BOLD}${YELLOW}1.${NC} 📱 VLESS TCP Vision"
+echo -e " ${BOLD}${YELLOW}2.${NC} 🔄 Ссылка подписки (импорт в клиент)"
+echo -e "${CYAN}──────────────────────────────────────────────────────────${NC}"
+read -p "Ваш выбор (1-2): " qr_choice
 case "$qr_choice" in
   1) qrencode -t UTF8 "$VLESS_VISION" ;;
   2) qrencode -t UTF8 "$SUBSCRIPTION_URL" ;;
-  *) echo "Выход без вывода QR-кода" ;;
+  *) echo -e "${RED}Выход без вывода QR-кода${NC}" ;;
 esac
 EOF
 
@@ -1777,40 +1880,48 @@ if [ "$1" == "--headless" ]; then
         fi
     done
 else
-    echo -e "\n=== Установка Xray-сервера ==="
+    echo -e "\n${BOLD}${CYAN}┌────────────────────────────────────────────────────────┐${NC}"
+    echo -e "${BOLD}${CYAN}│             🚀 Установка Xray VLESS Сервера            │${NC}"
+    echo -e "${BOLD}${CYAN}└────────────────────────────────────────────────────────┘${NC}"
+    echo -e " Добро пожаловать! Давайте настроим ваш новый VPN-сервер."
+    echo -e "${CYAN}──────────────────────────────────────────────────────────${NC}"
     
     # 1. Ввод домена с валидацией
     while true; do
-        read -p "Введите домен (например, sub.domain.com): " DOMAIN
+        echo -e " ${BOLD}${YELLOW}Шаг 1 из 4:${NC} Укажите ваш домен"
+        read -p " 🌐 Введите домен (например, sub.domain.com): " DOMAIN
         DOMAIN=$(echo "$DOMAIN" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's|^https\?://||' -e 's|/.*$||' -e 's|:.*$||')
         if [[ -n "$DOMAIN" ]]; then
             break
         fi
-        echo "❌ Домен не может быть пустым."
+        echo -e " ${RED}❌ Домен не может быть пустым. Пожалуйста, укажите валидный домен.${NC}"
     done
     
     # 2. Ввод Email с валидацией
     while true; do
-        read -p "Email для сертификата Let's Encrypt: " EMAIL
+        echo -e "\n ${BOLD}${YELLOW}Шаг 2 из 4:${NC} Укажите Email для SSL-сертификата Let's Encrypt"
+        read -p " 📧 Email: " EMAIL
         EMAIL=$(echo "$EMAIL" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
         if [[ "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
             break
         fi
-        echo "❌ Некорректный формат Email. Попробуйте еще раз (например: myemail@mail.com)."
+        echo -e " ${RED}❌ Некорректный формат Email. Попробуйте еще раз (например: myemail@mail.com).${NC}"
     done
     
     # 3. Ввод количества устройств с валидацией
     while true; do
-        read -p "Количество устройств: " NUM_DEVICES
+        echo -e "\n ${BOLD}${YELLOW}Шаг 3 из 4:${NC} Сколько клиентских устройств добавить?"
+        read -p " 📱 Количество устройств: " NUM_DEVICES
         if [[ "$NUM_DEVICES" =~ ^[1-9][0-9]*$ ]]; then
             break
         fi
-        echo "❌ Пожалуйста, введите положительное целое число."
+        echo -e " ${RED}❌ Пожалуйста, введите положительное целое число.${NC}"
     done
     
+    echo -e "\n ${BOLD}${YELLOW}Шаг 4 из 4:${NC} Задайте имена для ваших устройств"
     DEVICE_NAMES=()
     for i in $(seq 1 "$NUM_DEVICES"); do
-        read -p "Имя для устройства $i (по умолчанию: client_$i): " dev_name
+        read -p " 👤 Имя для устройства $i (по умолчанию client_$i): " dev_name
         dev_name=$(echo "$dev_name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
         if [[ -z "$dev_name" ]]; then
             DEVICE_NAMES[$i]="client_$i"
@@ -1818,6 +1929,8 @@ else
             DEVICE_NAMES[$i]="$dev_name"
         fi
     done
+    echo -e "${CYAN}──────────────────────────────────────────────────────────${NC}"
+    echo -e "${BOLD}${GREEN}⚙️ Запуск процесса автоматической сборки и установки...${NC}\n"
 fi
 
 # === Запуск установки ===
