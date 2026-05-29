@@ -47,7 +47,6 @@ if [ -f "$MARKER_FILE" ]; then
             crontab -l | grep -v "certbot renew" | crontab -
         fi
         ufw delete allow 443/tcp > /dev/null
-        ufw delete allow 443/udp > /dev/null
         ufw delete allow 80/tcp > /dev/null
         rm -f "$MARKER_FILE"
         echo "✅ Удалено"
@@ -141,7 +140,6 @@ install_xray() {
 setup_firewall() {
     echo "🛡 Настройка UFW..."
     ufw allow 443/tcp > /dev/null
-    ufw allow 443/udp > /dev/null
     ufw allow 80/tcp > /dev/null
     ufw allow 22/tcp > /dev/null
     ufw --force enable > /dev/null
@@ -184,7 +182,6 @@ generate_server_config() {
     
     # Инициализация массивов для клиентов
     local vless_clients=()
-    local hysteria_users=()
     
     # Генерация уникальных UUID для каждого устройства
     for i in $(seq 1 "$NUM_DEVICES"); do
@@ -196,16 +193,11 @@ generate_server_config() {
           \"flow\": \"xtls-rprx-vision\",
           \"email\": \"client-$i\"
         }")
-        
-        hysteria_users+=("{
-          \"auth\": \"$uuid\"
-        }")
     done
     
     local vless_clients_str=$(IFS=,; echo "${vless_clients[*]}")
-    local hysteria_users_str=$(IFS=,; echo "${hysteria_users[*]}")
     
-    # Генерация конфигурационного файла с тремя протоколами
+    # Генерация конфигурационного файла с VLESS TCP
     cat > "$config_file" <<EOF
 {
   "log": {
@@ -221,10 +213,6 @@ generate_server_config() {
         "clients": [$vless_clients_str],
         "decryption": "none",
         "fallbacks": [
-          {
-            "path": "/wspath/",
-            "dest": "127.0.0.1:10000"
-          },
           {
             "path": "/sub/",
             "dest": "127.0.0.1:10080"
@@ -250,49 +238,6 @@ generate_server_config() {
             "keyFile": "$SSL_DIR/private.key"
           }],
           "alpn": ["http/1.1"]
-        }
-      }
-    },
-    {
-      "listen": "127.0.0.1",
-      "port": 10000,
-      "protocol": "vless",
-      "settings": {
-        "clients": [$vless_clients_str],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "/wspath/"
-        }
-      }
-    },
-    {
-      "port": 443,
-      "protocol": "hysteria",
-      "settings": {
-        "version": 2,
-        "users": [$hysteria_users_str]
-      },
-      "streamSettings": {
-        "network": "hysteria",
-        "security": "tls",
-        "finalmask": {
-          "quicParams": {
-            "debug": false,
-            "congestion": "bbr"
-          }
-        },
-        "hysteriaSettings": {
-          "version": 2
-        },
-        "tlsSettings": {
-          "alpn": ["h3"],
-          "certificates": [{
-            "certificateFile": "$SSL_DIR/fullchain.cer",
-            "keyFile": "$SSL_DIR/private.key"
-          }]
         }
       }
     }
@@ -457,26 +402,16 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
 
         # Генерация ссылок по структуре:
         # ФЛАГ🌐 VLESS-TCP (имя)
-        # ФЛАГ🔌 VLESS-WS (имя)
-        # ФЛАГ⚡ HYSTERIA2 (имя)
         if emoji:
             remark_vision = f"{emoji}🌐 VLESS-TCP ({client_name})"
-            remark_ws = f"{emoji}🔌 VLESS-WS ({client_name})"
-            remark_hy2 = f"{emoji}⚡ HYSTERIA2 ({client_name})"
         else:
             remark_vision = f"🌐 VLESS-TCP ({client_name})"
-            remark_ws = f"🔌 VLESS-WS ({client_name})"
-            remark_hy2 = f"⚡ HYSTERIA2 ({client_name})"
 
         encoded_remark_vision = urllib.parse.quote(remark_vision)
-        encoded_remark_ws = urllib.parse.quote(remark_ws)
-        encoded_remark_hy2 = urllib.parse.quote(remark_hy2)
         
         vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=firefox#{encoded_remark_vision}"
-        vless_ws = f"vless://{uuid_param}@{domain}:443?security=tls&type=ws&path=%2Fwspath%2F&fp=firefox#{encoded_remark_ws}"
-        hysteria2 = f"hysteria2://{uuid_param}@{domain}:443/?sni={domain}&alpn=h3#{encoded_remark_hy2}"
         
-        sub_content = f"{vless_vision}\n{vless_ws}\n{hysteria2}\n"
+        sub_content = f"{vless_vision}\n"
         b64_content = base64.b64encode(sub_content.encode("utf-8")).decode("utf-8")
         
         self.send_response(200)
@@ -560,12 +495,8 @@ fi
 # Генерация названий с новыми эмодзи-символами и скобками
 if [ -n "$EMOJI" ]; then
   remark_vision="${EMOJI}🌐 VLESS-TCP (${remarks})"
-  remark_ws="${EMOJI}🔌 VLESS-WS (${remarks})"
-  remark_hy2="${EMOJI}⚡ HYSTERIA2 (${remarks})"
 else
   remark_vision="🌐 VLESS-TCP (${remarks})"
-  remark_ws="🔌 VLESS-WS (${remarks})"
-  remark_hy2="⚡ HYSTERIA2 (${remarks})"
 fi
 
 urlencode() {
@@ -573,37 +504,25 @@ urlencode() {
 }
 
 encoded_remark_vision=$(urlencode "$remark_vision")
-encoded_remark_ws=$(urlencode "$remark_ws")
-encoded_remark_hy2=$(urlencode "$remark_hy2")
 
 # Ссылки для подключения
 VLESS_VISION="vless://${UUID}@${DOMAIN}:${PORT}?flow=${FLOW}&security=tls&type=tcp&fp=${FINGERPRINT}#${encoded_remark_vision}"
-VLESS_WS="vless://${UUID}@${DOMAIN}:${PORT}?security=tls&type=ws&path=%2Fwspath%2F&fp=${FINGERPRINT}#${encoded_remark_ws}"
-HYSTERIA2="hysteria2://${UUID}@${DOMAIN}:${PORT}/?sni=${DOMAIN}&alpn=h3#${encoded_remark_hy2}"
 SUBSCRIPTION_URL="https://${DOMAIN}/sub/${UUID}"
 
 echo -e "\n=== Ссылки для подключения ==="
 echo -e "\n1. VLESS TCP Vision (Стандарт):"
 echo "$VLESS_VISION"
-echo -e "\n2. VLESS WebSocket (Обход блокировок / CDN):"
-echo "$VLESS_WS"
-echo -e "\n3. Hysteria 2 (QUIC / UDP протокол):"
-echo "$HYSTERIA2"
-echo -e "\n4. Ссылка подписки (все 3 конфига одной ссылкой):"
+echo -e "\n2. Ссылка подписки (импорт в клиент):"
 echo "$SUBSCRIPTION_URL"
 
 echo -e "\n=== Генерация QR-кода ==="
 echo "Выберите, для чего отобразить QR-код:"
 echo "1. VLESS TCP Vision"
-echo "2. VLESS WebSocket"
-echo "3. Hysteria 2"
-echo "4. Ссылка подписки (импорт в клиент)"
-read -p "Выбор (1-4): " qr_choice
+echo "2. Ссылка подписки (импорт в клиент)"
+read -p "Выбор (1-2): " qr_choice
 case "$qr_choice" in
   1) qrencode -t UTF8 "$VLESS_VISION" ;;
-  2) qrencode -t UTF8 "$VLESS_WS" ;;
-  3) qrencode -t UTF8 "$HYSTERIA2" ;;
-  4) qrencode -t UTF8 "$SUBSCRIPTION_URL" ;;
+  2) qrencode -t UTF8 "$SUBSCRIPTION_URL" ;;
   *) echo "Выход без вывода QR-кода" ;;
 esac
 EOF
