@@ -228,6 +228,9 @@ generate_server_config() {
           {
             "path": "/sub/",
             "dest": "127.0.0.1:10080"
+          },
+          {
+            "dest": "127.0.0.1:10080"
           }
         ]
       },
@@ -239,7 +242,7 @@ generate_server_config() {
             "certificateFile": "$SSL_DIR/fullchain.cer",
             "keyFile": "$SSL_DIR/private.key"
           }],
-          "alpn": ["h2", "http/1.1"]
+          "alpn": ["http/1.1"]
         }
       }
     },
@@ -290,7 +293,10 @@ generate_server_config() {
     }
   ],
   "outbounds": [{
-    "protocol": "freedom"
+    "protocol": "freedom",
+    "settings": {
+      "domainStrategy": "UseIPv4"
+    }
   }]
 }
 EOF
@@ -433,7 +439,7 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         encoded_remark_hy2 = urllib.parse.quote(remark_hy2)
         
         vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=chrome#{encoded_remark_vision}"
-        vless_xhttp = f"vless://{uuid_param}@{domain}:443?security=tls&type=xhttp&path=%2Fxhttppath%2F&fp=chrome#{encoded_remark_xhttp}"
+        vless_xhttp = f"vless://{uuid_param}@{domain}:443?security=tls&type=xhttp&mode=auto&path=%2Fxhttppath%2F&fp=chrome#{encoded_remark_xhttp}"
         hysteria2 = f"hysteria2://{uuid_param}@{domain}:443/?sni={domain}&alpn=h3#{encoded_remark_hy2}"
         
         sub_content = f"{vless_vision}\n{vless_xhttp}\n{hysteria2}\n"
@@ -538,7 +544,7 @@ encoded_remark_hy2=$(urlencode "$remark_hy2")
 
 # Ссылки для подключения
 VLESS_VISION="vless://${UUID}@${DOMAIN}:${PORT}?flow=${FLOW}&security=tls&type=tcp&fp=${FINGERPRINT}#${encoded_remark_vision}"
-VLESS_XHTTP="vless://${UUID}@${DOMAIN}:${PORT}?security=tls&type=xhttp&path=%2Fxhttppath%2F&fp=${FINGERPRINT}#${encoded_remark_xhttp}"
+VLESS_XHTTP="vless://${UUID}@${DOMAIN}:${PORT}?security=tls&type=xhttp&mode=auto&path=%2Fxhttppath%2F&fp=${FINGERPRINT}#${encoded_remark_xhttp}"
 HYSTERIA2="hysteria2://${UUID}@${DOMAIN}:${PORT}/?sni=${DOMAIN}&alpn=h3#${encoded_remark_hy2}"
 SUBSCRIPTION_URL="https://${DOMAIN}/sub/${UUID}"
 
