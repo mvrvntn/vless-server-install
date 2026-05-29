@@ -104,8 +104,8 @@ get_flag_emoji() {
 
     local c1=${country_code:0:1}
     local c2=${country_code:1:1}
-    local val1=$(( $(printf "%d" "$c1") - 65 + 127462 ))
-    local val2=$(( $(printf "%d" "$c2") - 65 + 127462 ))
+    local val1=$(( $(printf "%d" "'$c1") - 65 + 127462 ))
+    local val2=$(( $(printf "%d" "'$c2") - 65 + 127462 ))
     
     local flag
     printf -v flag "\\U$(printf "%08x" $val1)\\U$(printf "%08x" $val2)"
