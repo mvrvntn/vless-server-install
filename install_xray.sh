@@ -1122,7 +1122,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable xray-sub >/dev/null 2>&1
-    systemctl start xray-sub
+    systemctl restart xray-sub
 }
 
 # === Установка утилиты генерации ссылок ===
