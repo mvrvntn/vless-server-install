@@ -48,10 +48,47 @@ install_warp() {
     if [ ! -f "/etc/wireguard/warp.conf" ]; then
         echo "📥 Загрузка и запуск скрипта установки warp-native..."
         local temp_dir=$(mktemp -d)
-        curl -sL https://raw.githubusercontent.com/distillium/warp-native/main/install.sh -o "$temp_dir/install.sh"
-        chmod +x "$temp_dir/install.sh"
-        # Запускаем скрипт неинтерактивно с выбором английского языка и значений по умолчанию
-        (cd "$temp_dir" && printf "1\n\n\n" | bash install.sh)
+        local success=false
+
+        # Устанавливаем git если его нет
+        if ! command -v git &>/dev/null; then
+            echo "📦 Установка git..."
+            apt update >/dev/null
+            apt install -y git >/dev/null
+        fi
+
+        # Попытка 1: Клонирование репозитория через git (самый надежный способ со всеми зависимыми файлами)
+        echo "📥 Клонирование репозитория warp-native..."
+        if git clone --depth 1 https://github.com/distillium/warp-native.git "$temp_dir/repo" >/dev/null 2>&1; then
+            if [ -f "$temp_dir/repo/install.sh" ]; then
+                chmod +x "$temp_dir/repo/install.sh"
+                (cd "$temp_dir/repo" && printf "1\n\n\n" | bash install.sh)
+                success=true
+            fi
+        fi
+
+        # Попытка 2: Резервный curl (main)
+        if [ "$success" = false ]; then
+            echo "⚠️ git clone не удался, пробуем скачать install.sh через curl (main)..."
+            curl -sSL --connect-timeout 10 https://raw.githubusercontent.com/distillium/warp-native/main/install.sh -o "$temp_dir/install.sh"
+            if [ -s "$temp_dir/install.sh" ]; then
+                chmod +x "$temp_dir/install.sh"
+                (cd "$temp_dir" && printf "1\n\n\n" | bash install.sh)
+                success=true
+            fi
+        fi
+
+        # Попытка 3: Резервный curl (master)
+        if [ "$success" = false ]; then
+            echo "⚠️ Пробуем скачать install.sh через curl (master)..."
+            curl -sSL --connect-timeout 10 https://raw.githubusercontent.com/distillium/warp-native/master/install.sh -o "$temp_dir/install.sh"
+            if [ -s "$temp_dir/install.sh" ]; then
+                chmod +x "$temp_dir/install.sh"
+                (cd "$temp_dir" && printf "1\n\n\n" | bash install.sh)
+                success=true
+            fi
+        fi
+
         rm -rf "$temp_dir"
     fi
 
@@ -411,7 +448,7 @@ create_directories() {
 install_dependencies() {
     echo "📦 Установка зависимостей..."
     apt update > /dev/null
-    apt install -y curl qrencode ufw cron certbot python3 jq lsof > /dev/null
+    apt install -y curl git qrencode ufw cron certbot python3 jq lsof > /dev/null
 
     echo "⚡ Включение BBR и TCP Fast Open..."
     # Включаем BBR и FQ
