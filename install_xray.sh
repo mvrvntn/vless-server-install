@@ -724,6 +724,25 @@ generate_client_configs() {
 
     for i in $(seq 1 "$NUM_DEVICES"); do
         local name="${DEVICE_NAMES[$i]}"
+        local uuid="${UUIDs[$i]}"
+        
+        if [[ -z "$uuid" || -z "$name" ]]; then
+            if [ -f "$CLIENT_CONFIG_DIR/client_$i.json" ]; then
+                [[ -z "$uuid" ]] && uuid=$(grep -oP '"id": "\K[^"]+' "$CLIENT_CONFIG_DIR/client_$i.json" | head -1)
+                [[ -z "$name" ]] && name=$(grep -oP '"remarks": "\K[^"]+' "$CLIENT_CONFIG_DIR/client_$i.json" | head -1)
+            else
+                local conf=$(ls -1 "$CLIENT_CONFIG_DIR"/*.json 2>/dev/null | sed -n ${i}p)
+                if [ -n "$conf" ] && [ -f "$conf" ]; then
+                    [[ -z "$uuid" ]] && uuid=$(grep -oP '"id": "\K[^"]+' "$conf" | head -1)
+                    [[ -z "$name" ]] && name=$(grep -oP '"remarks": "\K[^"]+' "$conf" | head -1)
+                fi
+            fi
+            [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
+            [[ -z "$name" ]] && name="Device_$i"
+            UUIDs[$i]="$uuid"
+            DEVICE_NAMES[$i]="$name"
+        fi
+
         local filename="client_$i"
         local safe_filename=$(echo "$name" | tr -cd '[:alnum:]_.-' | tr '[:upper:]' '[:lower:]')
         if [[ -n "$safe_filename" ]]; then
@@ -733,7 +752,7 @@ generate_client_configs() {
         cat > "$CLIENT_CONFIG_DIR/${filename}.json" <<EOF
 {
   "remarks": "$name",
-  "id": "${UUIDs[$i]}",
+  "id": "$uuid",
   "outbounds": [{
     "protocol": "vless",
     "settings": {
@@ -741,7 +760,7 @@ generate_client_configs() {
         "address": "$DOMAIN",
         "port": 443,
         "users": [{
-          "id": "${UUIDs[$i]}",
+          "id": "$uuid",
           "flow": "xtls-rprx-vision"
         }]
       }]
@@ -1010,9 +1029,10 @@ class RoscomVPNResolver:
 
 roscomvpn_resolver = RoscomVPNResolver("default")
 
-def get_domain_and_emoji():
+def get_domain_emoji_fp():
     domain = ""
     emoji = ""
+    fp = "chrome"
     try:
         if os.path.exists(INSTALLED_FILE):
             with open(INSTALLED_FILE, "r") as f:
@@ -1021,9 +1041,13 @@ def get_domain_and_emoji():
                         domain = line.split("=", 1)[1].strip()
                     elif line.startswith("EMOJI="):
                         emoji = line.split("=", 1)[1].strip()
+                    elif line.startswith("FINGERPRINT="):
+                        fp = line.split("=", 1)[1].strip()
     except Exception:
         pass
-    return domain, emoji
+    if not fp:
+        fp = "chrome"
+    return domain, emoji, fp
 
 class SubHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -1057,7 +1081,7 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(DECOY_HTML.encode("utf-8"))
             return
         
-        domain, emoji = get_domain_and_emoji()
+        domain, emoji, fp = get_domain_emoji_fp()
         if not domain:
             domain = self.headers.get('Host', '').split(':')[0]
 
@@ -1068,7 +1092,7 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
 
         encoded_remark_vision = urllib.parse.quote(remark_vision)
         
-        vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp=randomized&alpn=http/1.1#{encoded_remark_vision}"
+        vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp={fp}&alpn=http/1.1#{encoded_remark_vision}"
         
         # Задаем комментарии с метаданными подписки (название, страница информации, анонсы)
         sub_content = f"#profile-title: {client_name}\n#profile-web-page-url: https://mvrvntn.github.io/koridor/\n#profile-notice: https://mvrvntn.github.io/koridor/\n#profile-announce: https://mvrvntn.github.io/koridor/\n#announce: https://mvrvntn.github.io/koridor/\n{vless_vision}\n"
@@ -1139,12 +1163,13 @@ YELLOW='\033[0;33m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 
-CONFIG_DIR="/etc/xray/client_configs"
-DOMAIN=$(grep DOMAIN /etc/xray/.installed | cut -d= -f2)
-EMOJI=$(grep EMOJI /etc/xray/.installed | cut -d= -f2)
-FLOW="xtls-rprx-vision"
-FINGERPRINT="randomized"
-PORT=443
+  CONFIG_DIR="/etc/xray/client_configs"
+  DOMAIN=$(grep DOMAIN /etc/xray/.installed | cut -d= -f2)
+  EMOJI=$(grep EMOJI /etc/xray/.installed | cut -d= -f2)
+  FLOW="xtls-rprx-vision"
+  FINGERPRINT=$(grep FINGERPRINT /etc/xray/.installed | cut -d= -f2)
+  if [ -z "$FINGERPRINT" ]; then FINGERPRINT="chrome"; fi
+  PORT=443
 
 mapfile -t config_files < <(find "$CONFIG_DIR" -maxdepth 1 -name '*.json' | sort)
 
@@ -1516,6 +1541,49 @@ EOF
         echo -e "${BOLD}${CYAN}└────────────────────────────────────────────────────────┘${NC}"
     }
 
+    change_fingerprint() {
+        echo -e "\n${BOLD}${CYAN}┌────────────────────────────────────────────────────────┐${NC}"
+        echo -e "${BOLD}${CYAN}│               Выбор отпечатка TLS (Fingerprint)        │${NC}"
+        echo -e "${BOLD}${CYAN}└────────────────────────────────────────────────────────┘${NC}"
+        echo -e " ${BOLD}${YELLOW}1.${NC} chrome (Рекомендуется, самый стабильный)"
+        echo -e " ${BOLD}${YELLOW}2.${NC} safari (Apple устройства)"
+        echo -e " ${BOLD}${YELLOW}3.${NC} ios (Мобильный Apple)"
+        echo -e " ${BOLD}${YELLOW}4.${NC} android (Мобильный Android)"
+        echo -e " ${BOLD}${YELLOW}5.${NC} edge (Microsoft Edge)"
+        echo -e " ${BOLD}${YELLOW}6.${NC} firefox (Mozilla Firefox)"
+        echo -e " ${BOLD}${YELLOW}7.${NC} 360 (Браузер 360)"
+        echo -e " ${BOLD}${YELLOW}8.${NC} qq (Браузер QQ)"
+        echo -e " ${BOLD}${YELLOW}9.${NC} random (Случайный из списка браузеров)"
+        echo -e " ${BOLD}${YELLOW}10.${NC} randomized (Полная рандомизация - может вызывать обрывы)"
+        echo -e "${CYAN}──────────────────────────────────────────────────────────${NC}"
+        read -p "Выберите отпечаток (1-10): " fp_choice
+        case $fp_choice in
+            1) new_fp="chrome" ;;
+            2) new_fp="safari" ;;
+            3) new_fp="ios" ;;
+            4) new_fp="android" ;;
+            5) new_fp="edge" ;;
+            6) new_fp="firefox" ;;
+            7) new_fp="360" ;;
+            8) new_fp="qq" ;;
+            9) new_fp="random" ;;
+            10) new_fp="randomized" ;;
+            *) echo -e "${RED}❌ Неверный выбор!${NC}" ; sleep 1 ; return ;;
+        esac
+
+        update_marker_val "FINGERPRINT" "$new_fp"
+        echo -e "${GREEN}✅ Отпечаток изменен на ${BOLD}${new_fp}${NC}"
+        
+        echo -e "🔄 Перегенерация конфигураций..."
+        generate_server_config
+        setup_subscription_server
+        generate_client_configs
+        install_generate_script
+        
+        echo -e "${GREEN}✅ Сервер обновлен! Обязательно обновите подписку в ваших клиентах.${NC}"
+        sleep 2
+    }
+
     main_menu() {
         show_status_dashboard
         echo -e "${BOLD}${CYAN}┌────────────────────────────────────────────────────────┐${NC}"
@@ -1529,10 +1597,11 @@ EOF
         echo -e " ${BOLD}${YELLOW}6.${NC} 📊 Мониторинг активных соединений (port 443)"
         echo -e " ${BOLD}${YELLOW}7.${NC} 🛠️ Запустить полную диагностику системы (Troubleshooting)"
         echo -e " ${BOLD}${YELLOW}8.${NC} 🔄 Обновить скрипт с GitHub и применить новые фиксы"
-        echo -e " ${BOLD}${RED}9. 🗑️ Полностью удалить всю установку Xray с сервера${NC}"
-        echo -e " ${BOLD}${CYAN}10.${NC} 🚪 Выйти из терминала"
+        echo -e " ${BOLD}${YELLOW}9.${NC} 🌐 Изменить отпечаток TLS (Fingerprint)"
+        echo -e " ${BOLD}${RED}10. 🗑️ Полностью удалить всю установку Xray с сервера${NC}"
+        echo -e " ${BOLD}${CYAN}11.${NC} 🚪 Выйти из терминала"
         echo -e "${CYAN}──────────────────────────────────────────────────────────${NC}"
-        read -p "Выберите действие (1-10): " choice
+        read -p "Выберите действие (1-11): " choice
         case $choice in
             1) "$GENERATE_SCRIPT" ; main_menu ;;
             2) add_client ; main_menu ;;
@@ -1549,7 +1618,8 @@ EOF
                 /root/install_xray.sh --update-core
                 exit 0
                 ;;
-            9) 
+            9) change_fingerprint ; main_menu ;;
+            10) 
                 echo -e "\n${BOLD}${RED}⚠️ ВНИМАНИЕ! Это действие удалит Xray, все конфигурации и WARP!${NC}"
                 read -p "Вы уверены? (y/n): " uconf
                 if [[ "$uconf" =~ ^[Yy]$ ]]; then
@@ -1558,7 +1628,7 @@ EOF
                     main_menu
                 fi
                 ;;
-            10) exit 0 ;;
+            11) exit 0 ;;
             *) echo -e "${RED}❌ Неверный выбор!${NC}" ; sleep 1 ; main_menu ;;
         esac
     }
