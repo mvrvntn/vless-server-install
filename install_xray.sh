@@ -540,7 +540,9 @@ generate_server_config() {
       "streamSettings": {
         "sockopt": {
           "interface": "warp",
-          "tcpFastOpen": true
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
         }
       }
     },
@@ -552,7 +554,9 @@ generate_server_config() {
       },
       "streamSettings": {
         "sockopt": {
-          "tcpFastOpen": true
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
         }
       }
     },
@@ -571,7 +575,9 @@ generate_server_config() {
       },
       "streamSettings": {
         "sockopt": {
-          "tcpFastOpen": true
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
         }
       }
     },
@@ -584,7 +590,9 @@ generate_server_config() {
       "streamSettings": {
         "sockopt": {
           "interface": "warp",
-          "tcpFastOpen": true
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
         }
       }
     },
@@ -629,7 +637,9 @@ generate_server_config() {
       },
       "streamSettings": {
         "sockopt": {
-          "tcpFastOpen": true
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
         }
       }
     },
@@ -680,10 +690,13 @@ generate_server_config() {
             "certificateFile": "$SSL_DIR/fullchain.cer",
             "keyFile": "$SSL_DIR/private.key"
           }],
-          "alpn": ["http/1.1"]
+          "alpn": ["http/1.1"],
+          "minVersion": "1.3"
         },
         "sockopt": {
-          "tcpFastOpen": true
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
         }
       }
     }
@@ -760,11 +773,14 @@ generate_client_configs() {
       "network": "tcp",
       "security": "tls",
       "tlsSettings": {
-        "fingerprint": "$FINGERPRINT"
+        "fingerprint": "$FINGERPRINT",
+        "minVersion": "1.3"
       },
       "sockopt": {
-        "tcpFastOpen": true
-      }
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
+        }
     }
   }]
 }
@@ -805,11 +821,14 @@ EOF
       "network": "tcp",
       "security": "tls",
       "tlsSettings": {
-        "fingerprint": "$FINGERPRINT"
+        "fingerprint": "$FINGERPRINT",
+        "minVersion": "1.3"
       },
       "sockopt": {
-        "tcpFastOpen": true
-      }
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
+        }
     }
   }]
 }
@@ -1476,9 +1495,15 @@ if [ -f "$MARKER_FILE" ]; then
     "streamSettings": {
       "network": "tcp",
       "security": "tls",
+      "tlsSettings": {
+        "fingerprint": "$FINGERPRINT",
+        "minVersion": "1.3"
+      },
       "sockopt": {
-        "tcpFastOpen": true
-      }
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr",
+          "tcpKeepAliveIdle": 300
+        }
     }
   }]
 }
