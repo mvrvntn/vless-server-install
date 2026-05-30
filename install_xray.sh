@@ -1155,8 +1155,7 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         
         announce_text = (
             "➔ Нет соединения? Нажмите ↻ Обновить\n"
-            "➔ Кабинет: https://mvrvntn.github.io/koridor/\n"
-            "➔ TG-бот: @RoscomVPN_bot"
+            "➔ коридор: https://mvrvntn.github.io/koridor/"
         )
         b64_announce = "base64:" + base64.b64encode(announce_text.encode('utf-8')).decode('utf-8')
         
