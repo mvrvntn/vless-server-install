@@ -842,15 +842,6 @@ EOF
     chmod 755 "$CLIENT_CONFIG_DIR"
     chmod 644 "$CLIENT_CONFIG_DIR"/*.json
 }
-EOF
-    done
-
-    # Обеспечиваем доступ на чтение для сервиса подписок (работающего под nobody)
-    chmod 755 /etc/xray
-    chown -R nobody:nogroup "$CLIENT_CONFIG_DIR"
-    chmod 755 "$CLIENT_CONFIG_DIR"
-    chmod 644 "$CLIENT_CONFIG_DIR"/*.json
-}
 
 # === Настройка сервера подписок ===
 setup_subscription_server() {
