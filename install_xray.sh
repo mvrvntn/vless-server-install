@@ -1737,9 +1737,9 @@ EOF
     echo "⚠️ Xray уже установлен"
     
     # Самодиагностика и исправление пустых/отсутствующих UUID
-    local repaired=false
+    repaired=false
     if [ -d "$CLIENT_CONFIG_DIR" ] && [ "$(find "$CLIENT_CONFIG_DIR" -name '*.json' 2>/dev/null | wc -l)" -gt 0 ]; then
-        local repair_output=$(python3 -c '
+        repair_output=$(python3 -c '
 import json, sys, os, uuid, re
 domain = "domain.com"
 try:
@@ -1839,8 +1839,10 @@ for filepath in sys.argv[1:]:
         echo "✅ Восстановление успешно завершено!"
     fi
 
-    main_menu
-    exit 0
+    if [ "$1" != "--update-core" ] && [ "$1" != "--update-geoblocks" ]; then
+        main_menu
+        exit 0
+    fi
 fi
 
 # === Логгирование ===
