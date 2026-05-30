@@ -1818,7 +1818,7 @@ for filepath in sys.argv[1:]:
             repaired=true
             echo "$repair_output" | while read -r line; do
                 if [[ "$line" =~ REPAIRED:(.+) ]]; then
-                    local path="${BASH_REMATCH[1]}"
+                    path="${BASH_REMATCH[1]}"
                     echo "⚙️ Восстановлен корректный UUID в $(basename "$path")"
                     chown nobody:nogroup "$path"
                     chmod 644 "$path"
