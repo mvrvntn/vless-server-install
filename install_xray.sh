@@ -1150,8 +1150,16 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         
         vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp={fp}&alpn=http/1.1#{encoded_remark_vision}"
         
+        client_display = f"RoscomVPN | {client_name}"
+        b64_client_display = "base64:" + base64.b64encode(client_display.encode('utf-8')).decode('utf-8')
+        
+        announce_text = "🔥 RoscomVPN — Быстрый и надежный VPN!\nПо всем вопросам пишите в нашу поддержку.\nСпасибо, что вы с нами!"
+        b64_announce = "base64:" + base64.b64encode(announce_text.encode('utf-8')).decode('utf-8')
+        
+        support_url = "https://t.me/RoscomVPN_bot" # Замените на реальный линк, если нужно
+
         # Задаем комментарии с метаданными подписки (название, страница информации, анонсы)
-        sub_content = f"#profile-title: {client_name}\n#profile-web-page-url: https://mvrvntn.github.io/koridor/\n#profile-notice: https://mvrvntn.github.io/koridor/\n#profile-announce: https://mvrvntn.github.io/koridor/\n#announce: https://mvrvntn.github.io/koridor/\n{vless_vision}\n"
+        sub_content = f"#profile-title: {client_display}\n#profile-update-interval: 12\n#support-url: {support_url}\n#profile-web-page-url: https://mvrvntn.github.io/koridor/\n#announce: {announce_text}\n#fragmentation-enable: 1\n#fragmentation-packets: tlshello\n#fragmentation-length: 10-30\n#fragmentation-interval: 10-20\n{vless_vision}\n"
         b64_content = base64.b64encode(sub_content.encode("utf-8")).decode("utf-8")
         
         _routing = roscomvpn_resolver.get()
@@ -1159,17 +1167,27 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        
         # Передаем заголовки для отображения названия подписки и переходов по кнопкам
-        self.send_header("profile-title", client_name)
-        self.send_header("Profile-Title", "base64:" + base64.b64encode(client_name.encode('utf-8')).decode('utf-8'))
+        self.send_header("profile-title", b64_client_display)
+        self.send_header("profile-update-interval", "12")
+        self.send_header("subscription-userinfo", "upload=0; download=0; total=1099511627776000; expire=4070908800")
+        self.send_header("support-url", support_url)
         self.send_header("profile-web-page-url", "https://mvrvntn.github.io/koridor/")
-        self.send_header("Profile-Web-Page-Url", "https://mvrvntn.github.io/koridor/")
-        self.send_header("profile-notice", "https://mvrvntn.github.io/koridor/")
-        self.send_header("Profile-Notice", "https://mvrvntn.github.io/koridor/")
-        self.send_header("profile-announce", "https://mvrvntn.github.io/koridor/")
-        self.send_header("Profile-Announce", "https://mvrvntn.github.io/koridor/")
-        self.send_header("announce", "https://mvrvntn.github.io/koridor/")
-        self.send_header("Announce", "https://mvrvntn.github.io/koridor/")
+        self.send_header("announce", b64_announce)
+        
+        # Улучшение UX (Авто-обновление и пинг)
+        self.send_header("subscription-auto-update-enable", "1")
+        self.send_header("subscription-ping-onopen-enabled", "1")
+        self.send_header("subscription-autoconnect", "1")
+        self.send_header("subscription-autoconnect-type", "lastused")
+        
+        # Анти-DPI фрагментация на стороне клиента (для Incy/Happ)
+        self.send_header("fragmentation-enable", "1")
+        self.send_header("fragmentation-packets", "tlshello")
+        self.send_header("fragmentation-length", "10-30")
+        self.send_header("fragmentation-interval", "10-20")
+
         if _routing:
             self.send_header("routing", _routing)
             self.send_header("routing-enable", "true")
