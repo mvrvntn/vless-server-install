@@ -737,7 +737,7 @@ generate_client_configs() {
     
     local DOMAIN=$(get_installed_var "DOMAIN")
     local FINGERPRINT=$(get_installed_var "FINGERPRINT")
-    if [ -z "$FINGERPRINT" ]; then FINGERPRINT="chrome"; fi
+    if [ -z "$FINGERPRINT" ]; then FINGERPRINT="ios"; fi
 
     if [ -d "$CLIENT_CONFIG_DIR" ] && [ "$(find "$CLIENT_CONFIG_DIR" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)" -gt 0 ]; then
         # Обновляем существующие конфиги (идемпотентность)
@@ -1150,10 +1150,14 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         
         vless_vision = f"vless://{uuid_param}@{domain}:443?flow=xtls-rprx-vision&security=tls&type=tcp&fp={fp}&alpn=http/1.1#{encoded_remark_vision}"
         
-        client_display = f"RoscomVPN | {client_name}"
+        client_display = f"{client_name}"
         b64_client_display = "base64:" + base64.b64encode(client_display.encode('utf-8')).decode('utf-8')
         
-        announce_text = "🔥 RoscomVPN — Быстрый и надежный VPN!\nПо всем вопросам пишите в нашу поддержку.\nСпасибо, что вы с нами!"
+        announce_text = (
+            "➔ Нет соединения? Нажмите ↻ Обновить\n"
+            "➔ Кабинет: https://mvrvntn.github.io/koridor/\n"
+            "➔ TG-бот: @RoscomVPN_bot"
+        )
         b64_announce = "base64:" + base64.b64encode(announce_text.encode('utf-8')).decode('utf-8')
         
         support_url = "https://t.me/RoscomVPN_bot" # Замените на реальный линк, если нужно
@@ -1171,7 +1175,6 @@ class SubHandler(http.server.BaseHTTPRequestHandler):
         # Передаем заголовки для отображения названия подписки и переходов по кнопкам
         self.send_header("profile-title", b64_client_display)
         self.send_header("profile-update-interval", "12")
-        self.send_header("subscription-userinfo", "upload=0; download=0; total=1099511627776000; expire=4070908800")
         self.send_header("support-url", support_url)
         self.send_header("profile-web-page-url", "https://mvrvntn.github.io/koridor/")
         self.send_header("announce", b64_announce)
@@ -1242,7 +1245,7 @@ RED='\033[0;31m'
   EMOJI=$(grep EMOJI /etc/xray/.installed | cut -d= -f2)
   FLOW="xtls-rprx-vision"
   FINGERPRINT=$(grep FINGERPRINT /etc/xray/.installed | cut -d= -f2)
-  if [ -z "$FINGERPRINT" ]; then FINGERPRINT="chrome"; fi
+  if [ -z "$FINGERPRINT" ]; then FINGERPRINT="ios"; fi
   PORT=443
 
 mapfile -t config_files < <(find "$CONFIG_DIR" -maxdepth 1 -name '*.json' | sort)
@@ -1483,7 +1486,7 @@ if [ -f "$MARKER_FILE" ]; then
         local new_uuid=$(xray uuid)
         DOMAIN=$(get_installed_var "DOMAIN")
         local FINGERPRINT=$(get_installed_var "FINGERPRINT")
-        if [ -z "$FINGERPRINT" ]; then FINGERPRINT="chrome"; fi
+        if [ -z "$FINGERPRINT" ]; then FINGERPRINT="ios"; fi
 
         cat > "$CLIENT_CONFIG_DIR/${safe_filename}.json" <<EOF
 {
